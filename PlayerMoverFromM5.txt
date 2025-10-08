@@ -1,0 +1,63 @@
+何をするスクリプト？
+
+M5 → UDP → UdpReceiver.latestAccel（x,y,z） を読み取り、
+UI（RectTransform）の anchoredPosition を加算してプレイヤーを動かします。
+
+“机に置いたら勝手に動く”を防ぐために
+入力スケール調整／デッドゾーン／ゼロ点補正（キャリブレーション）を内蔵しています。
+
+M5を縦持ちしたときの軸の入れ替え／反転にも対応。
+
+Inspector で触る主な項目
+
+pixelsPerG（px/秒 per g）
+1gあたり何ピクセル/秒で動くか。体感の速さをここで調整。
+
+deadZoneG（g）
+この絶対値以下の揺れは0扱いにして無視（“静止中に動かない”ための閾値）。
+本スクリプトはソフト・デッドゾーン：閾値を超えた分は再マップして感度を保ちます。
+
+inputScale
+受信値の“単位合わせ”。例：「5, 8, -15」が0.05g, 0.08g, -0.15gの意味なら 0.01 に設定。
+
+swapXY / invertX / invertY
+M5の持ち方に合わせて軸入替/符号反転。
+右に傾けて右へ、上に傾けて上へ…の“直感”に合うまで切り替えるだけ。
+
+bias / autoCalibrateOnStart / calibrateKey
+ゼロ点補正（バイアス）。机に置いた状態を“ゼロ”にするためのオフセット。
+
+再生中に calibrateKey（既定C） を押すと、その瞬間の姿勢を bias に記録
+
+autoCalibrateOnStart を ON にすると、Play開始時に自動で現在値をゼロとして採用
+
+処理の流れ（Update 内の要点）
+
+最新加速度を取得
+var r = UdpReceiver.Instance; → a = (r.latestAccel.x, r.latestAccel.y)
+
+入力スケーリング
+a *= inputScale;
+（5→0.05g など、送信値のスケールを“g単位”に揃える）
+
+軸の調整
+
+swapXY なら (x,y) を入れ替え
+
+invertX / invertY で符号反転
+
+ゼロ点補正
+a -= bias;
+（机に置いた“静止姿勢”を 0 にする）
+
+ソフト・デッドゾーン
+ApplySoftDeadzone(v, dz)
+
+|v| ≤ dz → 0
+
+|v| > dz → (|v|-dz)/(1-dz) に再マップ（超えた分だけ効く）
+これで“ピタッと止まりつつ、少し傾けたら滑らかに動く”を両立。
+
+座標更新
+rect.anchoredPosition += a * pixelsPerG * Time.deltaTime;
+UI基準（ピクセル/秒）でフレームレート非依存の移動。

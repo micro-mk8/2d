@@ -1,0 +1,59 @@
+主なフィールド（Inspectorで見えるとこ
+
+listenPort（例: 55001）
+M5側の送信ポートと一致させる
+
+autoStart　
+ONならスクリプト起動時に自動で受信開始。
+
+latestRaw
+直近に受け取ったテキスト（デバッグ用にそのまま表示される）。
+
+latestAccel
+受信文字列から取り出した ax, ay, az。UIや移動側はここを見るだけでいい。
+
+内部のしくみ
+
+Awake
+
+Instance をセット（2個目が出たら自動で破棄）
+
+多重生成を防ぎ、どこからでも UdpReceiver.Instance でアクセスできるようにしている。
+
+StartReceive / StopReceive
+
+StartReceive()：UdpClient を listenPort でバインドし、**受信ループ（非同期タスク）**を起動
+
+StopReceive()：ループ終了＆ソケット破棄
+
+autoStart が ON の場合、起動時に自動で StartReceive() される想定。
+
+ReceiveLoop（非同期）
+
+await UdpClient.ReceiveAsync() で待ち → 受け取った byte[] を UTF-8 文字列に
+
+その文字列を latestRaw に保存
+
+形式判定してパース
+
+CSV想定（例: "0.05, -0.02, 0.98"）
+→ , で分割 → float.Parse(..., InvariantCulture) で 小数点ドットとして読む
+→ latestAccel = (ax, ay, az)
+
+JSON想定（例: {"ax":0.05,"ay":-0.02,"az":0.98}）
+→ 簡易パーサ ParseAccelJson() と TryGetJsonNumber() で数値を抽出
+→ latestAccel に反映
+
+※CultureInfo.InvariantCulture を使っているのは、日本語OSでも小数点記号を必ず“.”で解釈するため（, を小数点と誤解しないように）。
+
+OnDestroy
+
+シーン終了/破棄時に StopReceive() してソケットを確実に閉じます。
+
+どう使う？（実運用の要点だけ）
+
+シーンに空のGameObjectを作り、UdpReceiver を 1つ 付ける。
+
+listenPort を M5 の送信先に合わせる。
+
+エディタの再生で latestRaw が更新され、必要なら latestAccel を他スクリプト（プレイヤー移動など）が参照。
