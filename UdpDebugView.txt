@@ -1,0 +1,66 @@
+何をするスクリプト？
+
+画面右の TextMeshPro テキスト（TMP_Text）に、
+
+監視ポート番号
+
+直近の受信文字列（latestRaw）
+
+直近の加速度ベクトル（latestAccel）
+を毎フレーム表示するだけの“ダッシュボード”です。
+
+受信できているか、値が動いているかをUnity上で即確認できます。
+
+主なフィールド
+
+TMP_Text text（SerializeField）
+表示先のテキスト UI。必ず割り当てが必要です（UdpDebugText などの TextMeshPro UI）。
+
+動作の流れ（Update 内）
+
+UdpReceiver.Instance を取得（シーンに 1 個だけある想定）。
+
+まだ置いていない／初期化前だと null なので、その場合は何もしません。
+
+text が未割り当てなら何もしません（nullガード）。
+
+text.text = $"UDP Port: ... \nRaw: ... \nAccel: ..." のように整形して上書き。
+
+latestAccel は x, y, z を 小数2桁（F2）で表示して読みやすくしています。
+
+使い方（接続手順の再確認）
+
+右パネル（InfoPanel）配下に Text - TextMeshPro を1つ作成（例：UdpDebugText）。
+
+UdpDebugView を Add Component。
+
+Text 欄に 自分自身の TMP_Text をドラッグして割り当て。
+
+シーン内に UdpReceiver が 1 個あることを確認。
+
+再生すると、右パネルにポート／Raw／Accel がライブ更新されます。
+
+よくあるつまずき
+
+何も表示が変わらない
+
+UdpReceiver がシーンに無い／listenPort が合っていない／ファイアウォールでブロック。
+
+text が未割り当て（Inspector の Text フィールドが空）でも更新されません。
+
+文字化けやフォント未設定
+
+日本語や記号を出す場合は TextMeshPro のフォントアセットに収録されているか確認（英数字のみなら既定でOK）。
+
+パフォーマンス
+
+毎フレーム text.text を差し替えるため、長文を流し続ける用途には不向き。
+デバッグ用途なので短文（数行）に留めるのが吉。
+
+このスクリプトの役割の位置づけ
+
+入力系（UdpReceiver）とゲームロジック（移動など）の間に挟む可視化レイヤ。
+
+値が“入ってきている”ことを素早く確かめるための開発用プローブです。
+
+本番で不要なら簡単に外せる（他コンポーネントと疎結合）。

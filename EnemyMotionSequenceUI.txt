@@ -1,0 +1,159 @@
+何をするスクリプト？
+
+**複数の“動きの区切り（セグメント）”**を並べて再生します。
+各セグメントは
+
+指定秒数だけあるパターンで動く
+
+指定秒数だけ停止（この停止位置を新しい原点に採用）
+
+次のセグメントへ切替
+
+端的に言うと、**「動く → 止まる → その場を原点に別パターン開始」**を繰り返す仕組みです。
+
+UIの**RectTransform（anchoredPosition）**で動かします（弾や当たり判定は一切なし）。
+
+主要データ構造
+enum MovePattern
+
+Straight：一定方向に直進
+
+HorizontalSine：Xに進みつつ Y をサイン波で揺らす
+
+VerticalSine：Yに進みつつ X をサイン波で揺らす
+
+FigureEight：その場の周りで 8の字（リサージュ）
+
+struct Segment
+
+各セグメントの設定一式。
+
+共通
+
+pattern：動きの種類
+
+durationSec：この動きを続ける時間（秒）
+
+pauseAfterSec：終了後の停止時間（秒）※停止したその場所が次の原点になる
+
+速度・方向
+
+speedPxPerSec：直進やサインの主軸スピード（px/s）
+
+direction：進行向き
+
+Straight はベクトルそのまま
+
+HorizontalSine は x の符号で左右を決定
+
+VerticalSine は y の符号で上下を決定
+
+サイン波
+
+amplitudePx（揺れ幅）, frequencyHz（周波数）, phaseOffset（初期位相）
+
+8の字
+
+eightWidthPx / eightHeightPx（幅・高さ）, eightSpeedHz（回転の速さ）, eightPhase（初期位相）
+
+ループ
+
+loopSequence：最後のセグメントの後、最初へ戻るか（ONでループ／OFFで最後に停止）
+
+内部で保持している状態
+
+idx：今再生中のセグメント番号（-1 は停止）
+
+segTime：そのセグメントの経過時間
+
+pauseRemain：停止残り時間
+
+リベース用
+
+originPos：セグメント開始時点の位置（＝直前の停止地点）
+
+sineOffset：サイン波の“前フレーム値”を保持（差分適用でドリフト防止）
+
+t：経過時間（サインや8の字の位相計算に使用）
+
+動きの流れ（Update の中身）
+
+停止中なら pauseRemain を減らし、0になったら Advance() で次セグメントへ。
+
+再生中なら現在のセグメント s = segments[idx] を読む。
+
+segTime += dt; / t += dt;
+
+pattern に応じて位置更新：
+
+Straight
+rect.anchoredPosition += dir * speed * dt;
+
+HorizontalSine
+
+主軸は X（左右へ進む）
+
+揺れは Y に amplitude * sin(ω t + φ) を差分で加算
+
+差分（newSine - sineOffset）を使うのは、累積誤差や切替時の瞬間ズレを防ぐため
+
+VerticalSine
+
+主軸は Y（上下へ進む）
+
+揺れは X にサインを差分で
+
+FigureEight
+
+originPos を中心に x = A sin(w t + φ), y = B sin(2w t + φ)
+
+絶対位置を originPos + (x, y) に直接設定（差分ではなく“描き直す”）
+
+規定時間に到達したらセグメント終了
+
+pauseAfterSec > 0：その場で停止状態に移行（この場所が次の原点）
+
+0 なら即 Advance()（切替時に BeginSegment(next) が呼ばれて originPos を現在地で更新）
+
+セグメント切替の肝（“リベース方式”）
+
+BeginSegment(newIndex)
+
+originPos = rect.anchoredPosition; ← ここがポイント：
+今いる場所を新しい原点に採用
+
+t = 0f; / sineOffset = Vector2.zero;（位相と差分バッファをリセット）
+
+segTime = 0f; / pauseRemain = 0f;
+
+Advance()
+
+次のインデックスに進み、終端なら loopSequence に応じて最初へ戻る／停止
+
+なぜ“差分サイン”と“絶対描画”を併用？
+
+**サイン系（Horizontal/Vertical）**は「移動＋揺れ」の合成なので、揺れは差分で加えると
+フレームレートや切替タイミングに左右されず滑らか。
+
+8の字は「その場で軌道をなぞる」性質なので、原点＋絶対座標で描く方がブレない。
+切替時に originPos を現在地へ更新することで、ワープ感が出ません。
+
+よくある質問／つまずき
+
+途中でピタッと止まりたい → pauseAfterSec に停止時間を入れる
+
+向きが逆 → サイン系は direction.x（横）／direction.y（縦）の符号だけ見ます
+
+端でガクつく → 枠外制限（UIRectClamp）が押し戻しています。気になる場合は
+amplitudePx を下げる、speedPxPerSec を落とす、切替直前に短い pause を入れると自然
+
+次のパターン開始時にズレる → それが“その場を原点に”の挙動です。
+元の原点に戻したい設計なら、originPos を固定値にする別仕様が必要（本スクリプトはリベース方式）
+
+このスクリプトの役割の位置づけ
+
+動きの演出を“時間で区切って並べる”ための小さなステートマシン。
+
+入力（M5）や弾・当たり判定とは独立。
+
+枠外制限（UIRectClamp）と組み合わせると、どんな切替でも画面内に収まり続けます。

@@ -1,0 +1,64 @@
+
+何をするスクリプト？
+
+UIの敵（RectTransform）を単一パターンで動かすためのコンポーネントです。
+
+直進・横/縦サイン・8の字・ウェイポイントの**4系＋α（WP）**を一つ選び、Inspectorの数値で調整します。
+
+Inspector 主な項目
+
+Pattern（MovePattern）
+
+Straight：一定方向に直進
+
+HorizontalSine：左右に進みつつ上下をサインで揺らす
+
+VerticalSine：上下に進みつつ左右をサインで揺らす
+
+FigureEight：その場で8の字（中心は開始位置）
+
+Waypoints：登録した点を順次移動（巡回可）
+
+speedPxPerSec：基本の移動速度（px/s）
+
+direction：進行向き
+
+Straightはそのまま使用
+
+HorizontalSineはxの符号だけ見て右(+)／左(-)を決定
+
+VerticalSineはyの符号だけ見て上(+)／下(-)を決定
+
+amplitudePx / frequencyHz / phaseOffset（サイン揺れ用）
+揺れ幅・速さ・初期位相
+
+eightWidthPx / eightHeightPx / eightSpeedHz / eightPhase（8の字用）
+
+Waypoints
+
+relativeWaypoints：ONだと「開始位置からの相対座標」
+
+loopWaypoints：最後まで行ったら先頭へ
+
+arriveEps：到達判定の許容誤差（px）
+
+waitAtPointSec：各点での待機秒
+
+中身の動作（ポイントだけ）
+
+Update()で選んだパターンの式に基づいてanchoredPositionを更新。
+
+サイン系は「直進ベース＋揺れの差分」を足す方式。
+前フレームのサイン値（sineOffset）との差分だけ加えることで、ドリフトや位相ズレを防止。
+
+FigureEight は「開始時の位置」を中心に絶対座標で描き直すため、ブレにくい。
+
+Waypoints は現在地→目標へのベクトルで一定速近似、到達したら次へ（ループ可）。
+
+併用とコツ
+
+UIRectClampと併用すると、どのパターンでもプレイエリア外に出ません。
+
+端でガクつきが気になるときは、amplitudeやspeedを少し下げる／Waypointsに短い待機を入れると自然。
+
+Anchor/Pivot は中央(0.5,0.5)推奨。親チェーンは回転0／スケール1が安定。

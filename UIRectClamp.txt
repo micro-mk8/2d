@@ -1,0 +1,94 @@
+何をするスクリプト？
+
+対象の RectTransform（例：PlayerRoot/EnemyRoot） が、指定した container（例：PlayAreaFrame） の内側に収まるよう、毎フレーム位置を押し戻してくれます。
+
+アンカー／ピボットの設定に依存せずに効くよう、四隅のワールド座標で境界判定します。
+
+M5移動や敵の自動移動より**後に走る（LateUpdate）**ため、「動かした→はみ出しそう→押し戻す」の順で安定します。
+
+どうやって動いているの？
+
+四隅の取得（ワールド座標）
+
+container.GetWorldCorners(...) と rect.GetWorldCorners(...) で、外枠と対象の四隅をワールド座標で取得します。
+
+ここから cMinX/cMaxX/cMinY/cMaxY と tMinX/tMaxX/tMinY/tMaxY を求めます。
+
+内側の境界を決定
+
+container の境界に padding（px） を内側へ差し引いて「進入禁止ライン」を作ります。
+
+例：cMinY = container下端 + padding.y
+
+必要な補正量（dx, dy）を計算
+
+対象が container より小さいとき：
+
+下にはみ出していれば dy = cMinY - tMinY（上に押し戻す）
+
+上にはみ出していれば dy = cMaxY - tMaxY（下に押し戻す）
+
+横も同様に dx を計算
+
+対象が container より大きいとき：
+
+端を揃えられないので、中心を合わせる（見切れるが、失われる量が最小で安定）
+
+ワールド→親ローカルへ変換して適用
+
+計算した dxW/dyW はワールド空間の補正なので、
+親 RectTransform に対して InverseTransformVector でローカル（anchoredPosition相当）の差分に変換し、
+rect.anchoredPosition += localDelta; として安全に適用します。
+
+これにより回転やスケールの影響を受けにくく、上下の片側だけ止まらない…といったズレを防ぎます。
+
+Inspector の主な項目
+
+Container（RectTransform）
+クランプの外枠。通常は PlayAreaFrame を割り当てます（必須）。
+
+Padding（Vector2）
+枠の内側にどれだけ余白を残すか（px）。(8, 8) など小さめから調整。
+
+Debug（任意）
+
+drawGizmos：選択中に**緑（container）／黄（対象）**の枠を Scene ビューに表示。
+
+debugLog：境界値と補正量をログ出力（挙動が怪しい時の診断用）。
+
+正しく効かせるコツ
+
+対象 = “実際に移動している” RectTransform 本体に付ける
+例：PlayerMoverFromM5 を PlayerRoot に付けているなら、UIRectClamp も PlayerRoot に付ける。
+
+Container は PlayAreaFrame
+HUDCanvas や SplitRoot を入れると基準がズレます。
+
+親チェーンの変形を素直に
+Canvas → SplitRoot → PlayAreaFrame → PlayerRoot の各 Transform は
+Rotation = (0,0,0)、Scale = (1,1,1) を基本に。変形が入ると境界も回転・拡縮されます。
+
+Layout 系の干渉に注意
+PlayAreaFrame に Layout Group があるのはOKですが、Player/Enemy 本体に
+ContentSizeFitter や LayoutElement で位置が拘束されると移動・補正が効きにくくなります。
+
+動作確認のやり方（上下が不安な時）
+
+Scene ビュー右上の Gizmos を ON。
+
+PlayerRoot（または EnemyRoot）を選択すると、
+
+緑：PlayAreaFrame の内側境界（padding 反映後）
+
+黄：対象オブジェクトの当たり矩形
+が表示されます。
+
+再生して傾ける／動かす → 黄枠が緑枠に触れたらそれ以上出ずに押し戻ることを確認。
+途中で止まる／はみ出す場合は、上の「コツ」を再点検し、padding を適量に。
+
+どこで使う？
+
+PlayerRoot / EnemyRoot の両方に付け、Container=PlayAreaFrame を指定しておけば、
+どんな移動（M5・蛇行・ウェイポイント）でも最後に枠内へ収める“ガードレール”として働きます。
+
+タグや Layer に依存しないため、当たり判定の設計と無関係に安全に使えます。
