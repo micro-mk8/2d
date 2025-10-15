@@ -1,0 +1,153 @@
+1) using（定型文）
+using System.Collections.Generic; // List/HashSet 用
+using UnityEngine;                // MonoBehaviour, Rect など
+
+
+定型文：C#と Unity の型を使えるようにする宣言。
+
+2) クラスの土台（定型文＋シングルトン）
+
+public class UICollisionManager : MonoBehaviour
+{
+    // --- シーンに1個だけ置く想定。複数あっても最初の1つ以外は無効化 ---
+    public static UICollisionManager Instance { get; private set; }
+
+    void Awake() // 定型文：最初の初期化
+    {
+        if (Instance != null && Instance != this) { enabled = false; return; }
+        Instance = this;
+    }
+
+
+定型文：MonoBehaviour を継承＝コンポーネント化。
+
+シングルトン：複数あっても最初の1つだけが働くようにします。
+
+3) 登録リスト（弾／当たり側を分けて保持）
+
+    // 監視対象（UIHitbox2D）を役割ごとに分けて保持
+    private static readonly HashSet<UIHitbox2D> s_Bullets  = new HashSet<UIHitbox2D>();
+    private static readonly HashSet<UIHitbox2D> s_Hurtboxes = new HashSet<UIHitbox2D>();
+
+    // UIHitbox2D から呼ばれる登録口（OnEnable/OnDisable 経由）
+    public static void Register(UIHitbox2D hb)
+    {
+        if (hb == null) return;
+        if (hb.role == UIRole.Bullet)  s_Bullets.Add(hb);
+        else                           s_Hurtboxes.Add(hb);
+    }
+
+    public static void Unregister(UIHitbox2D hb)
+    {
+        if (hb == null) return;
+        if (hb.role == UIRole.Bullet)  s_Bullets.Remove(hb);
+        else                           s_Hurtboxes.Remove(hb);
+    }
+
+
+ポイント：UIHitbox2D の OnEnable/OnDisable からここに出入りします。
+
+役割（Role）で 弾 と 当たり側 を分けることで突き合わせを最小化。
+
+4) 当たり判定ループ（Update：定型文）
+    // 一発の弾が同フレームに複数ヒットしないようにするオプション
+    [SerializeField] private bool oneHitPerBullet = true;
+
+    void Update() // 定型文：毎フレーム呼ばれる
+    {
+        // 弾ごとに、相手（Hurtbox）を総当たり
+        // ※UIのAABB（画面軸に沿った長方形）同士の重なりで判定
+        foreach (var bullet in s_Bullets)
+        {
+            if (bullet == null || !bullet.isActiveAndEnabled) continue;
+
+            Rect b = bullet.GetWorldAABB();
+            // 弾の陣営
+            var bFaction = bullet.faction;
+
+            foreach (var hurt in s_Hurtboxes)
+            {
+                if (hurt == null || !hurt.isActiveAndEnabled) continue;
+
+                // 同じ陣営同士（フレンドリーファイア無し）はスキップ
+                if (hurt.faction == bFaction) continue;
+
+                Rect h = hurt.GetWorldAABB();
+                if (!b.Overlaps(h, true)) continue; // true=端が触れたらヒット扱い
+
+                // === ヒット！双方へ通知 ===
+                NotifyHit(bullet, hurt);
+
+                if (oneHitPerBullet) break; // 1発につき最初の1体にだけ当てる
+            }
+        }
+    }
+
+
+Rect.Overlaps で AABB 同士の重なり判定（端が触れたらヒットにする true）。
+
+同陣営スキップ：味方弾→味方本体 などは無視。
+
+oneHitPerBullet：弾1発が同フレームに複数体へ当たらないようにする保険（弾幕系の定番）。
+
+5) ヒット通知の中身（弾側／被弾側の両方に知らせる）
+    private static readonly List<IUIBullet>     s_TmpBulletHandlers = new List<IUIBullet>(4);
+    private static readonly List<IUIHurtTarget> s_TmpHurtHandlers   = new List<IUIHurtTarget>(4);
+
+    private void NotifyHit(UIHitbox2D bullet, UIHitbox2D hurt)
+    {
+        if (bullet == null || hurt == null) return;
+
+        // --- 弾側（IUIBullet）に通知：通常は自分（弾）を消す／プールへ返す ---
+        s_TmpBulletHandlers.Clear();
+        bullet.GetComponents(s_TmpBulletHandlers); // 複数付いていても全部呼ぶ
+        for (int i = 0; i < s_TmpBulletHandlers.Count; i++)
+        {
+            // OnHit(当たった相手のHitbox) を渡す
+            s_TmpBulletHandlers[i].OnHit(hurt);
+        }
+
+        // --- 被弾側（IUIHurtTarget）に通知：HPを減らす等 ---
+        s_TmpHurtHandlers.Clear();
+        hurt.GetComponents(s_TmpHurtHandlers);
+        for (int i = 0; i < s_TmpHurtHandlers.Count; i++)
+        {
+            s_TmpHurtHandlers[i].OnHitBy(bullet);
+        }
+    }
+}
+
+
+弾側：IUIBullet.OnHit(target) を呼ぶ → 例：UIBulletOnHitRecycle がプール返却。
+
+被弾側：IUIHurtTarget.OnHitBy(bullet) を呼ぶ → 例：UIHealth がHP減少＆イベント発火。
+
+一時リストを使い回しして、Alloc（GC）を減らしています。
+
+6) ここまでで完成（全コード）
+
+上の 1〜5 をそのまま連結すれば完成です。誤記がないかだけ注意。
+
+
+
+<使い方>
+
+シーンに空の GameObject を作成 → 名前を UICollisionManager にして、このスクリプトを Add Component。
+
+1シーンに1個だけ置く想定（複数置いても最初の1つしか動作しません）。
+
+弾／本体に UIHitbox2D を付ける（前の解説どおり）：
+
+プレイヤー本体：Role=Hurtbox / Faction=Player
+
+敵本体：Role=Hurtbox / Faction=Enemy
+
+味方弾：Role=Bullet / Faction=Player
+
+敵弾　：Role=Bullet / Faction=Enemy
+
+弾側に IUIBullet 実装を1つ付ける（例：UIBulletOnHitRecycle）。
+
+被弾側に IUIHurtTarget 実装を1つ付ける（例：UIHealth）。
+
+再生して、重なった瞬間に弾が消える／HPが減ることを確認。

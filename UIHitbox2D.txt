@@ -1,0 +1,141 @@
+1) using の記述（定型文）
+using UnityEngine;
+
+
+定型文：Unity の型（MonoBehaviour, RectTransform, Vector2 など）を使う宣言。
+
+2) “弾” と “陣営” を表す列挙型（enum）を定義
+public enum UIFaction { Player, Enemy }
+public enum UIRole    { Bullet, Hurtbox }
+
+
+enum は、わかりやすい名前で小さな選択肢を作る型。
+
+ここでは
+
+UIFaction…どちらの陣営か（Player/Enemy）
+
+UIRole……当たる側か当てる側か（Hurtbox/Bullet）
+
+3) コンポーネントの必須条件を宣言（属性＝アトリビュート）
+[RequireComponent(typeof(RectTransform))]
+
+
+属性（クラスの直前に置くメタ情報）。
+
+これを付けると、このスクリプトを付けたオブジェクトに必ず RectTransform が一緒に付く。
+→ UI 前提の当たり判定なので必須。
+
+4) クラス宣言（定型文＋このスクリプトの名前）
+public class UIHitbox2D : MonoBehaviour
+
+
+定型文：MonoBehaviour を継承＝“Unity のコンポーネント”として振る舞える。
+
+5) インスペクターに並べたい項目を公開フィールドで用意
+{
+    [Header("役割と陣営")]
+    public UIRole    role    = UIRole.Bullet;
+    public UIFaction faction = UIFaction.Player;
+
+    [Header("余白（+で広げる／-で狭める）")]
+    public Vector2 padding = Vector2.zero; // px 単位（左右/上下）
+
+
+public にすると Inspector で編集可能。
+
+role / faction：弾（Bullet）か当たり側（Hurtbox）か、プレイヤー陣営か敵陣営か。
+
+padding：当たり枠を少し広げたり狭めたりする微調整。
+
+[Header] は 見出しを付ける装飾（任意）。
+
+6) 内部で使う“手持ち変数”を宣言
+    private RectTransform rect;                // 自分のUI四角
+    private static readonly Vector3[] C = new Vector3[4]; // 四隅を一時的に入れる配列
+
+
+rect は 自分自身の RectTransform を握っておく箱。
+
+C は 四隅の座標を入れる作業用。生成コストを抑えるためstaticな使い回し。
+
+7) Awake で最初の準備（定型文）
+    void Awake()
+    {
+        rect = GetComponent<RectTransform>();
+    }
+
+
+定型文：起動時に一度だけ呼ばれる初期化。
+
+自分に付いている RectTransform を取って rect に保存。
+
+8) 登録と解除：管理役に「見張ってね／もう要らないよ」を通知
+    void OnEnable()  { UICollisionManager.Register(this); }
+    void OnDisable() { UICollisionManager.Unregister(this); }
+
+
+オブジェクトが 有効化されたら 登録、無効化で 解除。
+
+これで UICollisionManager（別スクリプト）が「今いる弾と本体の一覧」を管理できる。
+
+ここまでで“当たり判定に参加する準備”ができました。
+次は「自分の当たり枠（四角）を返す関数」を書きます。
+
+9) 自分の当たり枠（AABB）を計算して返す
+    public Rect GetWorldAABB()
+    {
+        // 9-1) 自分の四隅のワールド座標を取得
+        rect.GetWorldCorners(C);
+
+        // 9-2) X と Y の最小/最大を計算（= 画面軸に揃った長方形の外接矩形）
+        float minX = Mathf.Min(C[0].x, C[1].x, C[2].x, C[3].x) - padding.x;
+        float maxX = Mathf.Max(C[0].x, C[1].x, C[2].x, C[3].x) + padding.x;
+        float minY = Mathf.Min(C[0].y, C[1].y, C[2].y, C[3].y) - padding.y;
+        float maxY = Mathf.Max(C[0].y, C[1].y, C[2].y, C[3].y) + padding.y;
+
+        // 9-3) 端点（Min/Max）から Rect を作る
+        return Rect.MinMaxRect(minX, minY, maxX, maxY);
+    }
+
+
+9-1：GetWorldCorners は RectTransform の四隅（左下・左上・右上・右下）をワールド座標で C[0..3] に入れてくれる。
+
+9-2：四隅の Xの最小/最大・Yの最小/最大をとると、画面の軸に平行な四角（AABB）が作れる。ここで padding を引いたり足したりして枠の広さを微調整。
+
+9-3：Rect.MinMaxRect で矩形を生成。
+
+ここは RectTransform.MinMaxRect ではないのがポイント（過去に出たエラーの原因でした）。
+
+10) Rect を外から読み取れるプロパティ（任意）
+    public RectTransform Rect => rect;
+}
+
+
+任意のゲッター。外から hitbox.Rect で自分の RectTransform を読める。
+
+
+
+
+ここまで書けたら動作の意味づけ
+
+UIHitbox2D 自体は「自分の四角い当たり枠を持って、管理役に登録する」だけ。
+
+「重なっているか？」の判定は UICollisionManager が、弾/本体の役割と陣営を見て計算します。
+
+だから 弾や本体のオブジェクトに UIHitbox2D を付けるだけで、当たり判定の候補に参加します。
+
+
+
+
+実際に使う時の“最小チェック”
+
+PlayerRoot：UIHitbox2D（Role=Hurtbox, Faction=Player）
+
+EnemyRoot：UIHitbox2D（Role=Hurtbox, Faction=Enemy）
+
+弾プレハブ：UIHitbox2D（Role=Bullet, Faction=Player/Enemy）
+
+シーンに UICollisionManager が1つある
+
+当たりが厳しすぎる/ゆるすぎる → padding を ±方向に少しずつ調整
