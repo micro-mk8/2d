@@ -1,0 +1,135 @@
+全体は「入力 → 生成 → 移動 → 当たり判定 → 破棄/リサイクル → スコア/表示」という循環で動
+
+1) 入力（M5 & キーボード）
+
+UdpReceiver
+M5 から届く UDP を受信して、
+
+latestAccel（加速度 ax, ay, az）
+
+latestRaw（生文字列。"FIRE" など）
+を更新
+
+PlayerMoverFromM5（PlayerRoot に付く）
+UdpReceiver.latestAccel を読み、デッドゾーン/ヒステリシス/反転・軸入替を適用して PlayerRoot の座標を動かす
+
+PlayerMoverUI（必要な時だけ）
+WASD/矢印キー入力で同じく PlayerRoot を移動する。
+
+UIRectClamp（Player/Enemy に付く）
+最後に PlayAreaFrame の内側に座標をクランプする。画面外へ出さない“柵”。
+
+M5FireBridge（PlayerRoot に付く）
+UdpReceiver.latestRaw が "FIRE" になったフレームだけ、AllyBulletController に「1発撃て」を指示。
+
+2) 弾の生成（プレイヤー弾・敵弾）
+
+AllyBulletController（PlayerRoot）
+味方弾（直進/追尾/M5発射）を 生成し、弾の初期化（親＝BulletLayer、寿命や当たり判定の初期設定）を行う。
+
+EnemyDanmakuController（EnemyRoot）
+一定間隔でパターンを選び、
+
+0: プレイヤー狙いツイン
+
+1: 半円ばら撒き
+
+2: 直進→分裂（破片ばら撒き）
+のいずれかで 敵弾を生成します。分裂本体は一定時間後に EnemySplitBulletUI が破片を出す。
+
+GameObjectPool / Poolable（BulletLayer 配下の空オブジェクト＋弾側）
+弾は基本 プールから借りる（Get）→ 用が済んだら返す（Release） 方式。
+生成負荷/GC を抑え、フレーム落ちを防せぐ。
+
+3) 弾・敵の移動
+
+EnemyBulletMoverUI（敵小弾）
+指定された 速度ベクトル(px/s) で直進。
+
+EnemySplitBulletUI（分裂本体）
+直進→タイマーで Explode() → 角度均等に小弾をプールから借りて射出。
+
+BulletHomingUI（味方の追尾弾）
+敵の位置を見て、視界コーン/旋回速度/なまし係数などの“弱めの追尾”で 進行方向を徐々に目標へ曲げる。
+
+AllyBulletBaseUI（味方/敵の弾に付く共通基盤）
+寿命タイマーと境界外チェックを持ち、寿命切れ/はみ出し時に
+プールへ返却（または Destroy）する。
+
+4) 当たり判定とヒット処理
+
+UIHitbox2D（弾/本体すべてに付く）
+自分の 当たり枠（AABB） と 役割（Bullet/Hurtbox）/陣営（Player/Enemy） を宣言し、出入り時に UICollisionManager に登録・解除する。
+
+UICollisionManager（シーンに1つ）
+毎フレーム、弾（Bullet）× 当たり側（Hurtbox） を突き合わせ、AABB が重なればヒット認定：
+
+弾側：IUIBullet.OnHit(hurt) を呼ぶ
+
+代表実装：UIBulletOnHitRecycle（命中時にプール返却）
+
+被弾側：IUIHurtTarget.OnHitBy(bullet) を呼ぶ
+
+代表実装：UIHealth（HPを減らし、イベント発火）
+
+UIHealth（Player/Enemy 本体に付く）
+弾からの被弾通知で HPを減少、
+
+onDamaged(cur,max) を通知（HUDなどへ）
+
+HPが0なら onDead() を通知（撃破/ゲームオーバー等のフック）
+さらに ScoringManager に「誰が誰へいくつ与えた/撃破した」を報告。
+
+5) スコアとクリア判定、表示
+
+ScoringManager（シーンに1つ）
+スコアの中核。
+
+与ダメージ×倍率、撃破ボーナスを加算
+
+ステージ開始時間を記録し、全撃破でクリアになったら クリアタイムの加点を計算・加算
+
+HUDPresenter に増分を渡して表示更新
+
+StageClearOnAllEnemiesDead
+登録した敵の onDead を数え、全員倒れたらクリア → ScoringManager.ComputeAndAddClearTimeBonus() を実行。
+
+StageTimerStart
+シーン開始時に ScoringManager のタイマー/統計をリセット（スコア自体は継続/初期化どちらでも運用可）。
+
+HUDPresenter（右パネルの HUDPanel に付く）
+UIHealth.onDamaged/onDead、ScoringManager からの通知を受けて
+HP/Lives/Score の Text を更新。
+
+6) 1フレームの“ざっくり時系列”
+
+UdpReceiver が M5 の UDP を受信（latestAccel/latestRaw 更新）
+
+PlayerMoverFromM5（または PlayerMoverUI）が PlayerRoot を移動
+
+UIRectClamp が Player/Enemy を PlayArea 内に収める
+
+EnemyDanmakuController / AllyBulletController が必要に応じて 弾を発射（プール Get）
+
+EnemyBulletMoverUI / BulletHomingUI / EnemySplitBulletUI が 弾を移動／分裂
+
+AllyBulletBaseUI が 寿命/画面外で弾を プール返却
+
+UICollisionManager が AABB重なりをチェック → ヒット通知
+
+UIBulletOnHitRecycle が弾を 返却
+
+UIHealth が HP減少 → ScoringManager に報告 → HUDPresenter 更新
+
+もし 全撃破なら StageClearOnAllEnemiesDead → ScoringManager が クリアタイム加点 → HUDPresenter 更新
+
+7) 役割対応表
+オブジェクト	主なコンポーネント	役割
+PlayerRoot：PlayerMoverFromM5 / PlayerMoverUI / UIHitbox2D(Hurtbox/Player) / UIRectClamp / AllyBulletController / M5FireBridge：操作・当たり・弾発射
+EnemyRoot：EnemyDanmakuController / UIHitbox2D(Hurtbox/Enemy) / UIRectClamp：敵弾幕・当たり
+小弾Prefab（敵/味方）：EnemyBulletMoverUI or（味方側の直進/追尾）/ UIHitbox2D(Bullet/陣営) / AllyBulletBaseUI / UIBulletOnHitRecycle / Poolable：弾の移動・寿命・当たり・リサイクル
+分裂本体Prefab：EnemySplitBulletUI / AllyBulletBaseUI /（任意で UIHitbox2D） / Poolable：直進→破片ばら撒き
+シーン管理：UICollisionManager / ScoringManager / StageClearOnAllEnemiesDead / StageTimerStart：当たり判定・スコア・クリア判定・タイマー
+HUDPanel：HUDPresenter（+ TMP Text）：右パネル表示（HP/Lives/Score）
+BulletLayer：GameObjectPool（小弾プール）：弾の親＆プール置き場
+PlayAreaFrame：画面の境界：（クランプや寿命判定に使用）

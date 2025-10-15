@@ -1,0 +1,87 @@
+0) まず前提の考え方
+
+弾のふるまいは色々（命中で消える／プールへ戻す／爆発する…）。
+
+それを共通の呼び出し口で扱うため、インターフェイス（＝“この関数を持ってね”という契約）を定義します。
+
+管理役（UICollisionManager）は、弾にこのインターフェイスが付いていれば命中時にその関数を呼びます。
+
+1) 新規ファイルを作成
+
+Assets/Scripts/Hit/ に IUIBullet.cs を新規作成。
+※ **クラスではなく“インターフェイス”**にするのが最大のポイント。
+
+2) using（定型文）
+using UnityEngine; // UIHitbox2D 型に触るため
+
+
+定型文：Unity 型を使えるようにする。今回は短いけど入れてOK。
+
+3) インターフェイスを宣言
+public interface IUIBullet
+{
+    // 弾が何かに当たった瞬間に呼ばれる。
+    // 引数 target は「当たった相手のヒットボックス」。
+    void OnHit(UIHitbox2D target);
+}
+
+
+interface で宣言（※ class にしない）。
+
+継承（: MonoBehaviour）を付けない（インターフェイスは継承不要）。
+
+メソッドは中身を書かない（= 仕様だけ）。実装は“各弾のスクリプト側”で行う。
+
+ここが間違いやすい：
+public class IUIBullet : MonoBehaviour { ... } などにするとエラー（“複数の基底クラス”）になる。必ず interface。
+
+4) ここまでの完成コード（短いけどこれがすべて）
+using UnityEngine;
+
+public interface IUIBullet
+{
+    void OnHit(UIHitbox2D target);
+}
+
+5) 実装（使い方）のイメージ
+
+弾プレハブに「命中したらどうするか」を書いた振る舞いスクリプトをつける。
+
+そのスクリプトが IUIBullet を実装（implements） すれば、命中時に OnHit(...) が呼ばれるようになる。
+
+例：命中したらプールへ返却する実装（要点だけ）
+using UnityEngine;
+
+[RequireComponent(typeof(RectTransform))]
+public class UIBulletOnHitRecycle : MonoBehaviour, IUIBullet
+{
+    public void OnHit(UIHitbox2D target)
+    {
+        var pb = GetComponent<Poolable>();
+        if (pb != null && pb.TryRelease()) return; // プールへ返却
+        Destroy(gameObject);                       // プール外なら破棄
+    }
+}
+
+
+, IUIBullet とカンマ区切りで実装を宣言。
+
+OnHit の中身は自由（消す／爆発させる／スコア加点を追加で通知…など）。
+
+6) UICollisionManager との関係（どう呼ばれる？）
+
+毎フレーム、UICollisionManager が 弾の AABB と相手の AABB が重なったかを判定。
+
+当たったら 弾の GameObject から IUIBullet 実装を取得して、OnHit(target) を呼ぶ。
+
+だから、弾プレハブには必ず 1つ以上の IUIBullet 実装を付けておくのが作法らしい。
+
+7) チェック
+
+IUIBullet.cs は interface になっている（class ではない）。
+
+弾プレハブに IUIBullet を実装したスクリプトが付いている（例：UIBulletOnHitRecycle）。
+
+シーンに UICollisionManager が1つ。
+
+弾と相手の UIHitbox2D の Role/Faction が正しい（同陣営はスキップされる）。

@@ -1,0 +1,210 @@
+1) using（定型文）
+using UnityEngine;
+using UnityEngine.Events; // UnityEvent を使う
+
+
+Unity の型とイベントの名前空間を使う宣言だ。
+
+2) クラス宣言と必須コンポーネント
+[RequireComponent(typeof(UIHitbox2D))]
+public class UIHealth : MonoBehaviour, IUIHurtTarget
+{
+
+
+RequireComponent で UIHitbox2D を必須にしておく。
+
+IUIHurtTarget を実装して、当たり判定管理から「当てられたよ」を受け取る。
+
+3) インスペクターで触るパラメータ
+    [Header("HP")]
+    [Min(1)] public int maxHP = 3;
+
+    // 読み取り用プロパティ。値は下の currentHP に保持
+    [SerializeField] private int currentHP = -1;
+    public int CurrentHP => currentHP;
+
+    [Header("死亡時の挙動")]
+    public bool destroyOnDeath = false;      // 死んだ瞬間に GameObject を消すか
+    public bool disableHitboxOnDeath = true; // 多重ヒット防止
+
+
+currentHP は内部保持。外から読む用に CurrentHP を出す。
+
+どう死ぬかはスイッチで調整できる。
+
+4) イベント（HUDや演出が受け取る）
+    [Header("イベント")]
+    public UnityEvent<int,int> onDamaged; // (currentHP, maxHP)
+    public UnityEvent onDead;
+
+
+ここに HUDPresenter などをドラッグで結線すれば、コードを書かずにUIを更新できる。
+
+5) 内部参照と状態
+    private UIHitbox2D myHitbox;
+    private bool isDead;
+
+
+自分のヒットボックスを握る。
+
+一度死んだら二重処理を防ぐためのフラグ。
+
+6) 初期化（Awake/OnEnable）
+    void Awake()
+    {
+        myHitbox = GetComponent<UIHitbox2D>();
+    }
+
+    void OnEnable()
+    {
+        isDead = false;
+        // 初回は maxHP をセット。復活時は保持値を尊重しつつクランプ
+        currentHP = Mathf.Clamp(currentHP < 0 ? maxHP : currentHP, 0, maxHP);
+        if (myHitbox) myHitbox.enabled = true;
+        // 開始直後にHUDへ同期したいなら:
+        onDamaged?.Invoke(currentHP, maxHP);
+    }
+
+
+Awake で参照を取る。
+
+OnEnable でHPを有効化し、HUD側に現在値を流す。
+
+7) 被弾コールバック（ここが本丸）
+    // UICollisionManager から呼ばれる入口
+    public void OnHitBy(UIHitbox2D bulletHitbox)
+    {
+        if (isDead || bulletHitbox == null || myHitbox == null) return;
+
+        // 同じ陣営（フレンドリーファイア無し）は無視
+        if (bulletHitbox.faction == myHitbox.faction) return;
+
+        // ダメージ値を決める（弾に UIBulletDamage があればそれ、無ければ1）
+        int dmg = 1;
+        var dmgComp = bulletHitbox.GetComponent<UIBulletDamage>();
+        if (dmgComp) dmg = Mathf.Max(1, dmgComp.damage);
+
+        // HPを減らす
+        currentHP = Mathf.Max(0, currentHP - dmg);
+        onDamaged?.Invoke(currentHP, maxHP);
+
+        // スコアへ報告（味方→敵の与ダメ／撃破加点用）
+        ScoringManager.Instance?.ReportDamage(bulletHitbox, this, dmg, currentHP <= 0);
+
+        // まだ生きていればここで終了
+        if (currentHP > 0) return;
+
+        // 以降は死亡処理
+        if (isDead) return;
+        isDead = true;
+
+        if (disableHitboxOnDeath && myHitbox) myHitbox.enabled = false;
+        onDead?.Invoke();
+
+        if (destroyOnDeath)
+        {
+            Destroy(gameObject);
+        }
+    }
+
+
+流れは単純だ。
+
+陣営チェック → 2) ダメージ決定 → 3) HP減少とイベント → 4) スコア報告 → 5) 0なら死亡処理。
+
+8) 任意：外部から復活や回復をさせる口
+    public void ResetHP()
+    {
+        currentHP = maxHP;
+        isDead = false;
+        if (myHitbox) myHitbox.enabled = true;
+        onDamaged?.Invoke(currentHP, maxHP);
+    }
+}
+
+
+リスタート時やチェックポイント復活で使える。
+
+9) 完成コード（全体）
+using UnityEngine;
+using UnityEngine.Events;
+
+[RequireComponent(typeof(UIHitbox2D))]
+public class UIHealth : MonoBehaviour, IUIHurtTarget
+{
+    [Header("HP")]
+    [Min(1)] public int maxHP = 3;
+
+    [SerializeField] private int currentHP = -1;
+    public int CurrentHP => currentHP;
+
+    [Header("死亡時の挙動")]
+    public bool destroyOnDeath = false;
+    public bool disableHitboxOnDeath = true;
+
+    [Header("イベント")]
+    public UnityEvent<int,int> onDamaged;
+    public UnityEvent onDead;
+
+    private UIHitbox2D myHitbox;
+    private bool isDead;
+
+    void Awake()
+    {
+        myHitbox = GetComponent<UIHitbox2D>();
+    }
+
+    void OnEnable()
+    {
+        isDead = false;
+        currentHP = Mathf.Clamp(currentHP < 0 ? maxHP : currentHP, 0, maxHP);
+        if (myHitbox) myHitbox.enabled = true;
+        onDamaged?.Invoke(currentHP, maxHP);
+    }
+
+    public void OnHitBy(UIHitbox2D bulletHitbox)
+    {
+        if (isDead || bulletHitbox == null || myHitbox == null) return;
+        if (bulletHitbox.faction == myHitbox.faction) return;
+
+        int dmg = 1;
+        var dmgComp = bulletHitbox.GetComponent<UIBulletDamage>();
+        if (dmgComp) dmg = Mathf.Max(1, dmgComp.damage);
+
+        currentHP = Mathf.Max(0, currentHP - dmg);
+        onDamaged?.Invoke(currentHP, maxHP);
+
+        ScoringManager.Instance?.ReportDamage(bulletHitbox, this, dmg, currentHP <= 0);
+
+        if (currentHP > 0) return;
+
+        if (isDead) return;
+        isDead = true;
+
+        if (disableHitboxOnDeath && myHitbox) myHitbox.enabled = false;
+        onDead?.Invoke();
+
+        if (destroyOnDeath)
+        {
+            Destroy(gameObject);
+        }
+    }
+
+    public void ResetHP()
+    {
+        currentHP = maxHP;
+        isDead = false;
+        if (myHitbox) myHitbox.enabled = true;
+        onDamaged?.Invoke(currentHP, maxHP);
+    }
+}
+
+10) 使い方
+
+PlayerRoot / EnemyRoot にこのコンポーネントを付ける。
+
+それぞれに UIHitbox2D（Role=Hurtbox, Faction=Player/Enemy） も付ける。
+
+HUDを更新したいなら、HUDPresenter を onDamaged/onDead に接続する。
+
+敵を倒したら消したいなら destroyOnDeath = ON。プレイヤーはOFFにしてゲームオーバー処理へつなぐのが普通。

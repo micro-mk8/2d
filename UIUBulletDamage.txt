@@ -1,0 +1,61 @@
+1) using の記述（定型文）
+using UnityEngine;
+
+
+Unity の型（MonoBehaviour や属性など）を使うための宣言である。
+
+2) クラス宣言の土台（定型文）
+public class UIBulletDamage : MonoBehaviour
+{
+}
+
+
+MonoBehaviour を継承してアタッチ可能なコンポーネントにしているのである。
+
+3) ダメージ値フィールドを定義するの
+    [Min(1)]
+    public int damage = 1;
+
+
+public int damage は弾が与えるダメージをインスペクターで設定できる変数である。
+
+[Min(1)] は 0 や負数の入力を防ぐための属性で、インスペクター上で最小1を保証するのである。
+
+既定値を 1 にしておくと、特別な調整が不要な弾はそのまま使えるのである。
+
+4) 完成コード全体
+using UnityEngine;
+
+public class UIBulletDamage : MonoBehaviour
+{
+    [Min(1)]
+    public int damage = 1;
+}
+
+5) このスクリプトが担う役割
+
+「弾が何ダメージを与えるか」というデータだけを保持する極小コンポーネントである。
+
+実際にダメージを適用するのは 被弾側の UIHealth である。UIHealth は命中時に弾からこのコンポーネントを GetComponent<UIBulletDamage>() で探し、存在すれば damage の値を使い、無ければ 1ダメージとして扱う実装である（前に組み込んだとおりである）。
+
+6) 使い方（手順を簡潔に示す）
+
+敵弾プレハブと味方弾プレハブの双方で、必要なものに Add Component → UIBulletDamage を付けるのである。
+
+インスペクターで damage を設定するのだ。例：
+
+雑魚の小弾：1
+
+ボスの大弾：2〜3
+
+特殊弾（要注意）：5 など
+
+被弾側（PlayerRoot や EnemyRoot）には UIHealth が付いている必要がある。ここが命中時にこの値を読むのである。
+
+当たり判定が機能するには、弾と本体に UIHitbox2D が付いており、UICollisionManager がシーンに存在する必要がある。これは前段で整備済みである。
+
+7) よくあるつまずき
+
+弾に UIBulletDamage を付け忘れたとしても、UIHealth はデフォルトで 1ダメージ扱いをするため、致命的な停止は起こらないのである。ただし想定より弱い/強いというバランス違いが発生しうるため、強弱を明確にしたい弾には必ず付けるべきである。
+
+被弾しない場合は、このスクリプトではなく Faction/Role の誤設定や UICollisionManager 未配置を疑うべきである。

@@ -1,0 +1,76 @@
+1) using（定型文）
+using UnityEngine;
+
+
+定型文：UIHitbox2D 型を参照するために Unity の名前空間を使えるようにする。
+
+2) インターフェイスを宣言する
+public interface IUIHurtTarget
+{
+    // 「弾(=bullet) に当てられたよ」という通知を受け取る。
+    // bullet は“当ててきた側”の UIHitbox2D（=弾の当たり枠）。
+    void OnHitBy(UIHitbox2D bullet);
+}
+
+
+interface で作ることが最重要（class にしない）。
+
+メソッドの中身は書かない（＝仕様だけ）。
+
+引数は「当ててきた弾のヒットボックス」。これで発射元の陣営やダメージ情報にアクセスできる。
+
+3) どう呼ばれるの？
+
+シーンにある UICollisionManager が、毎フレーム 弾(A)×当たり側(B) を突き合わせる。
+
+AABB が重なったら、B側（=当たり側）の GameObject から IUIHurtTarget を実装しているコンポーネントを集め、OnHitBy(bullet) を呼ぶ。
+
+つまり「当てられた側が“どう反応するか”」は、このインターフェイスを実装しているスクリプトの責務らしい。
+
+4) 代表的な実装例：UIHealth（行動の流れ）
+
+ここは“考え方”の説明です。既にあなたのプロジェクトでは UIHealth が実装済み。
+同じ流れで別の挙動（シールド、のけぞり等）を作れる。
+
+// 例：UIHealth は IUIHurtTarget を実装
+public class UIHealth : MonoBehaviour, IUIHurtTarget
+{
+    public int maxHP = 3;
+    int currentHP;
+
+    // これは管理役(UICollisionManager)から呼ばれる
+    public void OnHitBy(UIHitbox2D bullet)
+    {
+        // 1) フレンドリーファイアを無視（自分と同じ陣営の弾なら何もしない）
+        var myHB = GetComponent<UIHitbox2D>();
+        if (myHB && bullet && myHB.faction == bullet.faction) return;
+
+        // 2) ダメージ量を決める（弾に UIBulletDamage が付いていればそれ、無ければ 1）
+        int dmg = 1;
+        var dmgComp = bullet.GetComponent<UIBulletDamage>();
+        if (dmgComp) dmg = Mathf.Max(1, dmgComp.damage);
+
+        // 3) HPを減らす → 0以下なら死亡処理（イベント通知や破棄）
+        currentHP = Mathf.Max(0, currentHP - dmg);
+        // onDamaged?.Invoke(currentHP, maxHP) などでHUD更新
+        // if (currentHP == 0) { onDead?.Invoke(); Destroy(...) など }
+    }
+}
+
+
+ポイントは 「被弾側が自分の都合でどうするか決められる」 こと。
+HPを減らす／点滅させる／ヒットストップをかける…など、当てられた側の反応を自由に拡張できる。
+
+5) チェックリスト
+
+IUIHurtTarget.cs は interface（=「契約」）。MonoBehaviour を継承しない。
+
+当たりを受けたいオブジェクト（プレイヤーや敵）に、
+
+UIHitbox2D（Role=Hurtbox, Faction=…） が付いている
+
+IUIHurtTarget の実装（例：UIHealth） が付いている
+
+弾側には UIHitbox2D（Role=Bullet, Faction=…） と IUIBullet 実装（命中で消す等） が付いている。
+
+シーンに UICollisionManager が1つある。
