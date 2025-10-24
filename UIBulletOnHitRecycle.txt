@@ -1,0 +1,79 @@
+2) using（定型文）
+using UnityEngine;
+
+
+Unity の基本型を使う宣言だ。
+
+3) クラス宣言
+[RequireComponent(typeof(RectTransform))]
+public class UIBulletOnHitRecycle : MonoBehaviour, IUIBullet
+{
+
+
+弾はUI（RectTransform）前提なので RequireComponent を付ける。
+
+IUIBullet を実装して命中コールバックを受け取る。
+
+4) 内部参照を握る
+    private Poolable poolable; // あればプール返却に使う
+
+
+Awake で一度だけ取得して、OnHit で毎回 GetComponent しないようにする設計だ。
+
+5) 初期化（定型文）
+    void Awake()
+    {
+        poolable = GetComponent<Poolable>(); // 付いていなければ null のままでよい
+    }
+
+6) 命中時の本処理
+    public void OnHit(UIHitbox2D target)
+    {
+        // 1) プール運用なら TryRelease で非アクティブ化→プールへ返却
+        if (poolable != null && poolable.TryRelease())
+            return;
+
+        // 2) プール外なら破棄でフォールバック
+        if (this && gameObject)
+            Destroy(gameObject);
+    }
+
+
+TryRelease() は成功時 true を返す実装である前提だ（GameObjectPool／Poolable 側の用意）。
+
+this && gameObject のガードは、多重呼び出しや同フレーム二重処理の保険である。
+
+貫通させないのは UICollisionManager.oneHitPerBullet 側で担保する設計だ。
+
+7) 完成コード全体
+using UnityEngine;
+
+[RequireComponent(typeof(RectTransform))]
+public class UIBulletOnHitRecycle : MonoBehaviour, IUIBullet
+{
+    private Poolable poolable;
+
+    void Awake()
+    {
+        poolable = GetComponent<Poolable>();
+    }
+
+    public void OnHit(UIHitbox2D target)
+    {
+        if (poolable != null && poolable.TryRelease())
+            return;
+
+        if (this && gameObject)
+            Destroy(gameObject);
+    }
+}
+
+8) 使い方
+
+小弾プレハブ（味方弾・敵弾どちらも）に UIBulletOnHitRecycle を付ける。
+
+プール運用する弾は、プールから取り出す際に Poolable が付与される設計にしておく（GameObjectPool 実装側の責務）。
+
+プール未設定の時でも本コンポーネントは自動で Destroy にフォールバックするので動作は止まらない。
+
+当たり自体を発生させるには、弾に UIHitbox2D(Role=Bullet, Faction=Player/Enemy) を、被弾側に UIHitbox2D(Role=Hurtbox, Faction=…) と UIHealth（等の IUIHurtTarget 実装）を忘れず付ける。

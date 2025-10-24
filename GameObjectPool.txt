@@ -1,0 +1,263 @@
+これは何をするスクリプトか
+
+**GameObject の再利用（プーリング）**を行う汎用コンポーネントである。
+
+事前に Prefab を決めておき、Get() で取り出し、使い終わったら Release(go) で戻す。
+
+戻す側は弾などの個々のオブジェクトに付く Poolable が担当する（次回 #12 で解説）。
+
+構成の考え方
+
+プール本体は 非アクティブの GameObject を Stack<GameObject> に貯める。
+
+Get() は スタックに残っていれば Pop→活性化、空なら Instantiate（ただし上限管理）。
+
+Release(go) は 非アクティブ化→既定の親にぶら下げ→Push。
+
+取り出したオブジェクトに Poolable を必ず付与し、自分（プール）を覚えさせる。
+
+0) 新規ファイルを作る
+
+Assets/Scripts/Pooling/ に GameObjectPool.cs を作る。
+
+1) using（定型文）
+using System.Collections.Generic;
+using UnityEngine;
+
+2) クラス宣言とフィールド
+public class GameObjectPool : MonoBehaviour
+{
+    [Header("基本設定")]
+    [SerializeField] private GameObject prefab;              // プール対象のPrefab
+    [SerializeField] private Transform defaultParent;         // 取り出し/返却時の親
+    [SerializeField, Min(0)] private int prewarmCount = 0;    // 起動時に作っておく数
+    [SerializeField, Min(0)] private int maxSize = 500;       // これ以上は破棄方針
+    [SerializeField] private bool collectionChecks = false;   // 余計なチェックを行うか（パフォーマンス対策で通常OFF）
+
+    // 内部状態
+    private readonly Stack<GameObject> stack = new Stack<GameObject>(128);
+    private int totalCreated = 0;
+
+    public GameObject Prefab => prefab;
+    public Transform DefaultParent => defaultParent;
+    public int CountInactive => stack.Count;
+}
+
+
+prefab と defaultParent は Inspector で必ず設定する。
+
+maxSize 超過時の方針は「返却時に破棄」にする（実装で明示する）。
+
+3) 起動時の Prewarm
+    void Awake()
+    {
+        if (!prefab)
+        {
+            Debug.LogError("[GameObjectPool] Prefab が未設定だ", this);
+            enabled = false;
+            return;
+        }
+        if (!defaultParent) defaultParent = transform;
+
+        // 事前生成（非アクティブで積む）
+        for (int i = 0; i < prewarmCount; i++)
+        {
+            var go = CreateNew();
+            InternalRelease(go); // すぐ退避
+        }
+    }
+
+4) 生成ヘルパー（Poolable を必ず付ける）
+    private GameObject CreateNew()
+    {
+        var go = Instantiate(prefab);
+        totalCreated++;
+
+        // Poolable を保証し、所属プールを覚えさせる
+        var p = go.GetComponent<Poolable>();
+        if (!p) p = go.AddComponent<Poolable>();
+        p.BindPool(this);
+
+        return go;
+    }
+
+
+Poolable は後で解説するが、BindPool(this) で「戻り先」を記憶させる。
+
+5) 取り出し（Get）
+    public GameObject Get()
+    {
+        GameObject go = (stack.Count > 0) ? stack.Pop() : CreateNew();
+
+        if (defaultParent && go.transform.parent != defaultParent)
+            go.transform.SetParent(defaultParent, false);
+
+        if (!go.activeSelf) go.SetActive(true);
+        return go;
+    }
+
+
+親をそろえる（UIの座標ずれ防止）。
+
+取り出すときに 必ず Active にする。
+
+6) 返却（外部公開）
+    public void Release(GameObject go)
+    {
+        if (!go) return;
+
+        // 返却先が違うプールの可能性を低減（collectionChecks が必要なら厳密に検査）
+        if (collectionChecks)
+        {
+            var p = go.GetComponent<Poolable>();
+            if (!p || p.Owner != this)
+            {
+                Debug.LogWarning("[GameObjectPool] 異なるプールへ返却しようとした", go);
+                Destroy(go);
+                return;
+            }
+        }
+
+        InternalRelease(go);
+    }
+
+7) 返却（内部実装）
+    private void InternalRelease(GameObject go)
+    {
+        if (go.activeSelf) go.SetActive(false);
+
+        if (defaultParent && go.transform.parent != defaultParent)
+            go.transform.SetParent(defaultParent, false);
+
+        // 上限を超えるなら破棄
+        if (maxSize > 0 && (stack.Count + 1) > maxSize)
+        {
+            Destroy(go);
+            return;
+        }
+
+        stack.Push(go);
+    }
+
+
+非アクティブ→親を揃える→Push の順番が安定する。
+
+上限超過は 破棄で整流する。
+
+8) デバッグ用に現在サイズを表示（任意）
+    void OnGUI()
+    {
+#if UNITY_EDITOR
+        // 画面左上に簡易表示（任意）
+        // GUI.Label(new Rect(10, 10, 300, 20),
+        //     $"Pool:{name} Inactive={stack.Count} Created={totalCreated}");
+#endif
+    }
+
+
+任意であり、不要なら省略してかまわない。
+
+9) 完成コード（全体）
+using System.Collections.Generic;
+using UnityEngine;
+
+public class GameObjectPool : MonoBehaviour
+{
+    [Header("基本設定")]
+    [SerializeField] private GameObject prefab;
+    [SerializeField] private Transform defaultParent;
+    [SerializeField, Min(0)] private int prewarmCount = 0;
+    [SerializeField, Min(0)] private int maxSize = 500;
+    [SerializeField] private bool collectionChecks = false;
+
+    private readonly Stack<GameObject> stack = new Stack<GameObject>(128);
+    private int totalCreated = 0;
+
+    public GameObject Prefab => prefab;
+    public Transform DefaultParent => defaultParent;
+    public int CountInactive => stack.Count;
+
+    void Awake()
+    {
+        if (!prefab)
+        {
+            Debug.LogError("[GameObjectPool] Prefab が未設定だ", this);
+            enabled = false;
+            return;
+        }
+        if (!defaultParent) defaultParent = transform;
+
+        for (int i = 0; i < prewarmCount; i++)
+        {
+            var go = CreateNew();
+            InternalRelease(go);
+        }
+    }
+
+    private GameObject CreateNew()
+    {
+        var go = Instantiate(prefab);
+        totalCreated++;
+
+        var p = go.GetComponent<Poolable>();
+        if (!p) p = go.AddComponent<Poolable>();
+        p.BindPool(this);
+
+        return go;
+    }
+
+    public GameObject Get()
+    {
+        GameObject go = (stack.Count > 0) ? stack.Pop() : CreateNew();
+
+        if (defaultParent && go.transform.parent != defaultParent)
+            go.transform.SetParent(defaultParent, false);
+
+        if (!go.activeSelf) go.SetActive(true);
+        return go;
+    }
+
+    public void Release(GameObject go)
+    {
+        if (!go) return;
+
+        if (collectionChecks)
+        {
+            var p = go.GetComponent<Poolable>();
+            if (!p || p.Owner != this)
+            {
+                Debug.LogWarning("[GameObjectPool] 異なるプールへ返却しようとした", go);
+                Destroy(go);
+                return;
+            }
+        }
+
+        InternalRelease(go);
+    }
+
+    private void InternalRelease(GameObject go)
+    {
+        if (go.activeSelf) go.SetActive(false);
+
+        if (defaultParent && go.transform.parent != defaultParent)
+            go.transform.SetParent(defaultParent, false);
+
+        if (maxSize > 0 && (stack.Count + 1) > maxSize)
+        {
+            Destroy(go);
+            return;
+        }
+
+        stack.Push(go);
+    }
+}
+
+10) 使い方
+
+シーンで空の GameObject を作り GameObjectPool を付ける。
+
+Prefab に（例）小弾プレハブ、Default Parent に BulletLayer を割り当てる。
+
+PrewarmCount を同時弾数の目安（100〜200）に、MaxSize を多め（300〜600）に。
+
+弾を出す側で pool.Get() を使い、弾側は命中/寿命/画面外で Poolable.TryRelease() を呼ぶ（UIBulletOnHitRecycle や AllyBulletBaseUI がこれを行う）。

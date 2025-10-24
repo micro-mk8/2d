@@ -1,0 +1,229 @@
+1) using（定型文）
+using UnityEngine;
+
+
+Unity の型を使う宣言だ。定型文である。
+
+2) クラス宣言の土台
+public class EnemyDanmakuController : MonoBehaviour
+{
+
+
+MonoBehaviour を継承してアタッチ可能にする。定型文である。
+
+3) 参照と基本パラメータを宣言する
+
+弾をどこへ出すか、何を出すか、どれくらいの頻度で出すか――を全部 Inspector から調整できるよう [SerializeField] を付ける。
+
+    [Header("参照")]
+    [SerializeField] private RectTransform bulletLayer;     // 弾の親（UIのレイヤ）
+    [SerializeField] private RectTransform playAreaFrame;   // 画面内矩形（寿命判定に使う）
+    [SerializeField] private RectTransform enemyRoot;       // 敵の見た目の座標を取る
+    [SerializeField] private RectTransform playerRoot;      // 狙い撃ち用に参照
+
+    [Header("プレハブ")]
+    [SerializeField] private GameObject enemyBulletPrefab;       // 小弾（直進）
+    [SerializeField] private GameObject enemySplitBulletPrefab;  // 分裂本体
+
+    [Header("プール（任意）")]
+    [SerializeField] private GameObjectPool enemyBulletPool;     // 小弾用（無ければ Instantiate でフォールバック）
+
+    [Header("射撃タイミング")]
+    [SerializeField, Min(0.05f)] private float fireInterval = 0.5f; // 何秒おきにパターンを1回発動するか
+    private float fireTimer = 0f;
+
+    [Header("パターン重み")]
+    [SerializeField, Min(0)] private int weightAimTwin  = 5;  // パターン0：狙いツイン
+    [SerializeField, Min(0)] private int weightSemiArc  = 3;  // パターン1：半円ばら撒き
+    [SerializeField, Min(0)] private int weightSplit    = 2;  // パターン2：分裂
+
+    [Header("弾パラメータ：狙いツイン")]
+    [SerializeField] private float aimSpeed = 480f;     // px/sec
+    [SerializeField] private float aimOffsetX = 8f;     // 2発の左右オフセット
+
+    [Header("弾パラメータ：半円ばら撒き")]
+    [SerializeField] private float semiSpeed = 420f;    // px/sec
+    [SerializeField] private int   semiStepDeg = 15;    // 角度刻み（例：0..180 を15度刻み）
+
+    [Header("弾パラメータ：分裂")]
+    [SerializeField] private float splitMainSpeed   = 360f; // 本体の直進速度
+    [SerializeField] private float splitAfterSec    = 0.8f; // 何秒後に爆ぜるか
+    [SerializeField] private int   splitShards      = 12;   // 破片の個数
+    [SerializeField] private float shardSpeed       = 340f; // 破片の速度
+
+
+ポイントは「全部インスペクターで調整可能」にしておくことだ。後で難易度外だしに移行しやすい。
+
+4) Update で射撃タイマーを回す
+
+一定間隔でパターンを一回だけ発火させるロジックにする。
+
+    void Update()
+    {
+        if (!enemyRoot || !bulletLayer) return;
+
+        fireTimer += Time.deltaTime;
+        if (fireTimer < fireInterval) return;
+        fireTimer = 0f;
+
+        FireOnePattern();
+    }
+
+5) パターン選択のロジック
+
+重み付きランダムで 0/1/2 のどれかを選ぶ。重みが 0 のものは選ばれない。
+
+    private void FireOnePattern()
+    {
+        int w0 = Mathf.Max(0, weightAimTwin);
+        int w1 = Mathf.Max(0, weightSemiArc);
+        int w2 = Mathf.Max(0, weightSplit);
+        int sum = w0 + w1 + w2;
+        if (sum == 0) return;
+
+        int r = Random.Range(0, sum);
+        if (r < w0) { Pattern_AimTwin(); return; }
+        r -= w0;
+        if (r < w1) { Pattern_SemiArc(); return; }
+        Pattern_Split();
+    }
+
+6) 弾を1発出すヘルパー
+
+プールがあれば Get、無ければ Instantiate にフォールバックする。出したら必ず初期化する（位置・速度・当たり設定・寿命の参照）。
+
+    private GameObject Spawn(GameObject prefab)
+    {
+        GameObject go = enemyBulletPool ? enemyBulletPool.Get()
+                                        : Instantiate(prefab, bulletLayer);
+        if (!enemyBulletPool && go.transform.parent != bulletLayer)
+            go.transform.SetParent(bulletLayer, false);
+        return go;
+    }
+
+    private void InitBullet(GameObject go, Vector2 anchoredPos, Vector2 velocityPxPerSec)
+    {
+        var rt = go.GetComponent<RectTransform>();
+        rt.anchoredPosition = anchoredPos;
+
+        // 寿命コンポーネントにプレイエリアを渡す（画面外・寿命で返却/破棄させる）
+        var baseLife = go.GetComponent<AllyBulletBaseUI>();
+        if (baseLife) baseLife.Init(playAreaFrame);
+
+        // 直進の速度設定
+        var mover = go.GetComponent<EnemyBulletMoverUI>();
+        if (mover) mover.SetVelocity(velocityPxPerSec);
+
+        // 当たり属性（弾・敵陣営）
+        var hb = go.GetComponent<UIHitbox2D>();
+        if (hb) { hb.role = UIRole.Bullet; hb.faction = UIFaction.Enemy; }
+    }
+
+7) パターン0：狙いツイン（プレイヤー方向に左右ずらして2発）
+
+敵の中心から、プレイヤーへ向かう正規化ベクトルを作り、速度を掛けて撃つ。左右オフセットは見た目の間隔調整用だ。
+
+    private void Pattern_AimTwin()
+    {
+        Vector2 e = enemyRoot.anchoredPosition;
+        Vector2 p = playerRoot ? (Vector2)playerRoot.anchoredPosition : e + Vector2.down * 80f;
+        Vector2 dir = (p - e).normalized;
+        Vector2 v   = dir * aimSpeed;
+
+        // 左右オフセット
+        Vector2 right = new Vector2(1, 0); // 画面座標系の右方向（UIはY上が+）
+        Vector2 offL = -right * aimOffsetX;
+        Vector2 offR =  right * aimOffsetX;
+
+        var b0 = Spawn(enemyBulletPrefab);
+        InitBullet(b0, e + offL, v);
+
+        var b1 = Spawn(enemyBulletPrefab);
+        InitBullet(b1, e + offR, v);
+    }
+
+8) パターン1：半円ばら撒き（0..180度を等間隔で並べる）
+
+角度を度で回し、cos/sin から単位ベクトルを作って速度を掛ける。UI座標系は右が+X、上が+Y だ。
+
+    private void Pattern_SemiArc()
+    {
+        Vector2 e = enemyRoot.anchoredPosition;
+
+        for (int deg = 0; deg <= 180; deg += Mathf.Max(1, semiStepDeg))
+        {
+            float rad = deg * Mathf.Deg2Rad;
+            Vector2 dir = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad));
+            Vector2 v   = dir * semiSpeed;
+
+            var b = Spawn(enemyBulletPrefab);
+            InitBullet(b, e, v);
+        }
+    }
+
+9) パターン2：分裂（本体が直進→一定時間後に破片を円形に吐く）
+
+本体プレハブを出し、EnemySplitBulletUI にセットアップ情報を渡す。破片は小弾プレハブで、プールを渡せば中で Get() を使ってくれる設計だ。
+
+    private void Pattern_Split()
+    {
+        if (!enemySplitBulletPrefab) return;
+
+        Vector2 e = enemyRoot.anchoredPosition;
+        Vector2 down = Vector2.down; // 上から下へ直進させたいなら (0, -1)
+        Vector2 vMain = down * splitMainSpeed;
+
+        GameObject go = Instantiate(enemySplitBulletPrefab, bulletLayer);
+        var rt = go.GetComponent<RectTransform>();
+        rt.anchoredPosition = e;
+
+        var baseLife = go.GetComponent<AllyBulletBaseUI>();
+        if (baseLife) baseLife.Init(playAreaFrame);
+
+        var split = go.GetComponent<EnemySplitBulletUI>();
+        if (split)
+        {
+            split.Setup(
+                spaceRT: bulletLayer,
+                containerRT: playAreaFrame,
+                initialVelocity: vMain,
+                splitAfterSeconds: splitAfterSec,
+                shardPrefab: enemyBulletPrefab,
+                shardCount: Mathf.Max(1, splitShards),
+                shardSpeed: shardSpeed,
+                shardPool: enemyBulletPool   // 小弾はプールから出す
+            );
+        }
+
+        // 本体にも当たり判定を付けたい場合は、別途 UIHitbox2D を設定しておく
+    }
+
+10) クラスの終わり
+}
+
+
+定型文である。
+
+11) 使い方（最小手順）
+
+EnemyRoot（敵のUIオブジェクト）にこのコンポーネントをアタッチする。
+
+Inspector で参照を割り当てる。
+
+Bullet Layer＝BulletLayer
+
+Play Area Frame＝PlayAreaFrame
+
+Enemy Root＝自分（EnemyRoot の RectTransform）
+
+Player Root＝PlayerRoot の RectTransform
+
+Enemy Bullet Prefab＝小弾プレハブ（UIHitbox2D(Bullet/Enemy), EnemyBulletMoverUI, AllyBulletBaseUI, UIBulletOnHitRecycle などが付いていること）
+
+Enemy Split Bullet Prefab＝分裂本体プレハブ（EnemySplitBulletUI 付き）
+
+Enemy Bullet Pool＝小弾の GameObjectPool（任意。無ければ空でOK）
+
+パラメータ（速度や間隔、破片数、重み）を好みで調整する。
+
+再生すると、fireInterval ごとに重み付きでパターンが発動し、弾が出る。

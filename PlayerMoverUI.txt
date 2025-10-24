@@ -1,0 +1,178 @@
+何をするスクリプト？
+    Canvas 上の UI オブジェクト（RectTransform）を、WASD／矢印キーで動かす
+
+速度は Inspector の moveSpeed で変更できる（単位は「ピクセル/秒」）。
+
+斜め移動のときも速さが増えないように等速化している
+
+主要パーツの意味
+
+@RequireComponent(typeof(RectTransform))
+このコンポーネントを付ける対象には必ず RectTransform が必要、という宣言。
+UI専用の移動
+
+@SerializeField float moveSpeed = 400f;
+インスペクターでいじれる速度。大きいほど速く動く。
+
+RectTransform rectTr;（Awakeで取得）
+動かす本体。anchoredPosition を加算して位置を変えます。
+
+Update()
+毎フレーム呼ばれます。ここで入力を読む
+（Input.GetAxisRaw("Horizontal")/("Vertical")）
+
+旧Input Managerの標準設定で、矢印キー＋WASDが反映されます
+
+左/下 = -1、ニュートラル = 0、右/上 = +1
+
+ベクトル化して斜めを等速化（Normalize()）
+
+rectTr.anchoredPosition += 方向 × 速度 × Δt で移動
+
+SetMoveSpeed(float speed)
+速度をスクリプトから変更したい時用の安全な setter（負値は0扱い）。
+
+行動の流れ
+
+キー入力から (x,y) の方向を作る
+
+斜め時に速くなりすぎないよう正規化
+
+Time.deltaTime（前フレームからの経過秒）を掛けて、ピクセル/秒の速度をフレーム独立で適用
+
+anchoredPosition に足して、Canvas内の座標を更新
+
+
+
+
+new txt
+
+1) using（定型文）
+using UnityEngine;
+
+2) クラス宣言と必須コンポーネント
+[RequireComponent(typeof(RectTransform))]
+public class PlayerMoverUI : MonoBehaviour
+{
+
+
+プレイヤーは UI オブジェクト（RectTransform）なので、必須指定をしておく。
+
+3) インスペクター設定項目
+    [Header("移動設定")]
+    [Tooltip("ピクセル/秒 単位の移動速度")]
+    [SerializeField, Min(1f)] private float moveSpeed = 600f;
+
+    [Tooltip("Time.timeScale の影響を無視するならON")]
+    [SerializeField] private bool useUnscaledTime = false;
+
+
+moveSpeed：プレイヤーの速さ（px/秒）。
+
+useUnscaledTime：ポーズ中でも動かすならON。
+
+4) 内部変数
+    private RectTransform rect;
+    private Vector2 moveDir;
+
+
+rect は自分自身の位置。
+
+moveDir は入力方向ベクトル（例：右上なら (1,1)）。
+
+5) 初期化
+    void Awake()
+    {
+        rect = GetComponent<RectTransform>();
+    }
+
+
+起動時に自分の RectTransform を取得しておく。
+
+6) 入力と移動の処理
+    void Update()
+    {
+        float dt = useUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
+
+        // 入力をまとめる
+        float h = Input.GetAxisRaw("Horizontal"); // A/D or ←/→
+        float v = Input.GetAxisRaw("Vertical");   // W/S or ↑/↓
+
+        moveDir = new Vector2(h, v);
+
+        // 長さが1を超える場合（斜め入力）は正規化
+        if (moveDir.sqrMagnitude > 1f)
+            moveDir.Normalize();
+
+        // 実際の移動
+        Vector2 delta = moveDir * moveSpeed * dt;
+        rect.anchoredPosition += delta;
+    }
+
+
+Unity 標準の Input.GetAxisRaw でキー入力を取る。
+
+WASD／矢印を同時に押すと (x,y) が複合になる。
+
+速度を deltaTime で時間補正して滑らかに動かす。
+
+7) 外部から速度を調整できる口
+    public void SetSpeed(float pxPerSec)
+    {
+        moveSpeed = Mathf.Max(0f, pxPerSec);
+    }
+
+
+プレイヤー強化などで速度を変えたいときに使う。
+
+8) 完成コード（全体）
+using UnityEngine;
+
+[RequireComponent(typeof(RectTransform))]
+public class PlayerMoverUI : MonoBehaviour
+{
+    [Header("移動設定")]
+    [Tooltip("ピクセル/秒 単位の移動速度")]
+    [SerializeField, Min(1f)] private float moveSpeed = 600f;
+
+    [Tooltip("Time.timeScale の影響を無視するならON")]
+    [SerializeField] private bool useUnscaledTime = false;
+
+    private RectTransform rect;
+    private Vector2 moveDir;
+
+    void Awake()
+    {
+        rect = GetComponent<RectTransform>();
+    }
+
+    void Update()
+    {
+        float dt = useUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
+
+        float h = Input.GetAxisRaw("Horizontal");
+        float v = Input.GetAxisRaw("Vertical");
+
+        moveDir = new Vector2(h, v);
+        if (moveDir.sqrMagnitude > 1f)
+            moveDir.Normalize();
+
+        Vector2 delta = moveDir * moveSpeed * dt;
+        rect.anchoredPosition += delta;
+    }
+
+    public void SetSpeed(float pxPerSec)
+    {
+        moveSpeed = Mathf.Max(0f, pxPerSec);
+    }
+}
+
+9) 使い方
+
+PlayerRoot にこのスクリプトをアタッチする。
+
+移動速度を調整する（例：600〜800）。
+
+再生して WASD または矢印キーでプレイヤーが動くことを確認する。
+
+M5 操作と併用しないときは PlayerMoverFromM5 を無効化しておく。

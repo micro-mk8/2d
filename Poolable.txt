@@ -1,0 +1,52 @@
+0) 目的
+
+GameObjectPool と対で使う小さな部品である。
+
+プール側は取り出し時に Poolable.BindPool(this) を呼んで**所有プール（戻り先）**を記録させる。
+
+弾側は命中・寿命・画面外などのタイミングで TryRelease() を呼べば、安全に返却できる。
+
+1) 新規ファイルを作る
+
+Assets/Scripts/Pooling/ に Poolable.cs を作る。ファイル名＝クラス名を一致させる。
+
+2) using（定型文）
+using UnityEngine;
+
+3) クラス宣言と基本設計
+public class Poolable : MonoBehaviour
+{
+    // どのプールの管理下か（null なら未管理＝Instantiate直系）
+    public GameObjectPool Owner { get; private set; }
+
+    // 返却時に追加でやりたい処理があればフックする
+    [SerializeField] private bool resetTransformOnRelease = true;
+}
+
+
+Owner は戻り先プールだ。GameObjectPool.CreateNew() で BindPool(this) を呼んでセットする設計にしてある。
+
+resetTransformOnRelease は返却時に スケール/回転などを初期化したい時に使う任意のフラグだ（必要なければ常に false でよい）。
+
+4) プールを結びつける口
+    public void BindPool(GameObjectPool pool)
+    {
+        Owner = pool;
+    }
+
+
+生成元のプールが自分を覚えさせるためのメソッドである。
+
+5) プールへ安全に返却する本体（TryRelease）
+    public bool TryRelease()
+    {
+        // すでに破棄処理中だったり、Owner が無いなら返却不能
+        if (!this || Owner == null) return false;
+
+        // 返却前に整える（任意）
+        if (resetTransformOnRelease)
+        {
+            var t = transform as RectTransform;
+            if (t)
+            {
+                t.anchoredPosition = Vector2.zero;

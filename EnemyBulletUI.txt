@@ -1,0 +1,152 @@
+1) using（定型文）
+using UnityEngine;
+
+
+Unity の基本型を使う宣言だ。
+
+2) クラス宣言と必須コンポーネント
+[RequireComponent(typeof(RectTransform))]
+public class EnemyBulletMoverUI : MonoBehaviour
+{
+
+
+弾は UI（RectTransform）で描画している前提なので RequireComponent を付ける。
+
+MonoBehaviour 継承はアタッチ可能にするための定型だ。
+
+3) インスペクターで触る移動パラメータ
+    [Header("移動設定")]
+    [Tooltip("px/秒の速度ベクトル（UI座標：右+X / 上+Y）")]
+    [SerializeField] private Vector2 velocityPxPerSec = new Vector2(0f, -400f);
+
+    [Tooltip("Time.timeScale の影響を受けないなら ON")]
+    [SerializeField] private bool useUnscaledTime = false;
+
+    [Tooltip("速度に掛ける係数。スロー/加速に使える")]
+    [SerializeField, Min(0f)] private float speedMultiplier = 1f;
+
+    [Tooltip("進行方向へ見た目を向けるなら ON（Z回転を使う）")]
+    [SerializeField] private bool faceVelocity = false;
+
+
+速度は px/秒で持つ。UI座標は右が+X、上が+Yだ。下に落としたいなら y を負にする。
+
+speedMultiplier は一括で速度を増減させたい時に便利だ。
+
+faceVelocity は見た目を進行方向に回すオプションだ（画像が矢印の時などに使う）。
+
+4) 内部参照
+    private RectTransform rect;
+
+
+自分の RectTransform を握っておく箱だ。
+
+5) 初期化（定型文）
+    void Awake()
+    {
+        rect = GetComponent<RectTransform>();
+    }
+
+
+Awake で一度だけ取得するのが基本だ。
+
+6) 1フレームの移動ロジック
+    void Update()
+    {
+        float dt = useUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
+        Vector2 delta = velocityPxPerSec * speedMultiplier * dt;
+        rect.anchoredPosition += delta;
+
+        if (faceVelocity)
+        {
+            // 速度がほぼゼロなら回さない
+            if (velocityPxPerSec.sqrMagnitude > 0.0001f)
+            {
+                float angleDeg = Mathf.Atan2(velocityPxPerSec.y, velocityPxPerSec.x) * Mathf.Rad2Deg;
+                rect.localEulerAngles = new Vector3(0f, 0f, angleDeg);
+            }
+        }
+    }
+
+
+dt は通常は Time.deltaTime を使う。ポーズ無視の弾にしたい時は useUnscaledTime を ON にする。
+
+実際の移動は anchoredPosition += 速度×時間 という一次運動そのものだ。
+
+回転は Atan2(y, x) を角度に直して Z 回転に入れる（2Dなので Z を回す）。
+
+7) 外部から速度をセットする口
+    public void SetVelocity(Vector2 vPxPerSec)
+    {
+        velocityPxPerSec = vPxPerSec;
+    }
+
+    public void SetSpeedMultiplier(float m)
+    {
+        speedMultiplier = Mathf.Max(0f, m);
+    }
+
+    public Vector2 GetVelocity() => velocityPxPerSec;
+
+
+弾幕側（EnemyDanmakuController）から初速を注入するための口だ。
+
+係数だけ動的にいじってスローや加速を表現してもいい。
+
+8) 完成コード全体
+using UnityEngine;
+
+[RequireComponent(typeof(RectTransform))]
+public class EnemyBulletMoverUI : MonoBehaviour
+{
+    [Header("移動設定")]
+    [Tooltip("px/秒の速度ベクトル（UI座標：右+X / 上+Y）")]
+    [SerializeField] private Vector2 velocityPxPerSec = new Vector2(0f, -400f);
+
+    [Tooltip("Time.timeScale の影響を受けないなら ON")]
+    [SerializeField] private bool useUnscaledTime = false;
+
+    [Tooltip("速度に掛ける係数。スロー/加速に使える")]
+    [SerializeField, Min(0f)] private float speedMultiplier = 1f;
+
+    [Tooltip("進行方向へ見た目を向けるなら ON（Z回転を使う）")]
+    [SerializeField] private bool faceVelocity = false;
+
+    private RectTransform rect;
+
+    void Awake()
+    {
+        rect = GetComponent<RectTransform>();
+    }
+
+    void Update()
+    {
+        float dt = useUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
+        Vector2 delta = velocityPxPerSec * speedMultiplier * dt;
+        rect.anchoredPosition += delta;
+
+        if (faceVelocity && velocityPxPerSec.sqrMagnitude > 0.0001f)
+        {
+            float angleDeg = Mathf.Atan2(velocityPxPerSec.y, velocityPxPerSec.x) * Mathf.Rad2Deg;
+            rect.localEulerAngles = new Vector3(0f, 0f, angleDeg);
+        }
+    }
+
+    public void SetVelocity(Vector2 vPxPerSec) => velocityPxPerSec = vPxPerSec;
+    public void SetSpeedMultiplier(float m) => speedMultiplier = Mathf.Max(0f, m);
+    public Vector2 GetVelocity() => velocityPxPerSec;
+}
+
+9) 使い方
+
+小弾プレハブにこのコンポーネントを付ける。
+
+弾を出す側（EnemyDanmakuController）で
+
+var mover = bulletGO.GetComponent<EnemyBulletMoverUI>();
+mover.SetVelocity(発射方向の単位ベクトル * 速度pxPerSec);
+
+
+のように初速を設定する。
+
+画面外や寿命の管理は AllyBulletBaseUI が受け持つ。役割を分けるのがコツ

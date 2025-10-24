@@ -1,0 +1,239 @@
+1) using（定型文）
+using UnityEngine;
+
+
+Unity の基本型を使う宣言である。
+
+2) クラス宣言と必須
+[RequireComponent(typeof(RectTransform))]
+public class EnemySplitBulletUI : MonoBehaviour
+{
+
+
+UI運用のため RectTransform を必須にしておく。
+
+3) フィールド設計（外から渡す値）
+
+「シーン側（発射側）が初期化時に渡す」を基本にする。Inspectorから弄るよりコードでセットが安全である。
+
+    // 参照
+    private RectTransform space;      // 破片の親（BulletLayer）
+    private RectTransform container;  // 画面内矩形（寿命や外判定に使う）
+
+    // 運動
+    private Vector2 velocity;         // 本体の直進速度（px/秒）
+
+    // 分裂パラメータ
+    private float splitAfterSec;      // 何秒後に爆ぜるか
+    private GameObject shardPrefab;   // 破片として出す小弾のプレハブ
+    private int shardCount;           // 破片の個数
+    private float shardSpeed;         // 破片の初速（px/秒）
+
+    // プール（任意）：渡されれば Get/Release を使う
+    private GameObjectPool shardPool;
+
+    // 内部
+    private RectTransform rect;
+    private float timer;
+
+4) 初期化（Awake）
+    void Awake()
+    {
+        rect = GetComponent<RectTransform>();
+    }
+
+5) セットアップ口（発射直後に一度だけ呼ぶ）
+
+発射側（EnemyDanmakuController）から必要な全情報を注入する。未指定を避けるため引数で受けるのがコツである。
+
+    public void Setup(
+        RectTransform spaceRT,
+        RectTransform containerRT,
+        Vector2 initialVelocity,
+        float splitAfterSeconds,
+        GameObject shardPrefab,
+        int shardCount,
+        float shardSpeed,
+        GameObjectPool shardPool = null  // 省略可
+    )
+    {
+        this.space       = spaceRT;
+        this.container   = containerRT;
+        this.velocity    = initialVelocity;
+        this.splitAfterSec = Mathf.Max(0.05f, splitAfterSeconds);
+        this.shardPrefab = shardPrefab;
+        this.shardCount  = Mathf.Max(1, shardCount);
+        this.shardSpeed  = shardSpeed;
+        this.shardPool   = shardPool;
+    }
+
+6) Update（本体の移動と分裂タイマー）
+    void Update()
+    {
+        // 本体の一次運動
+        rect.anchoredPosition += velocity * Time.deltaTime;
+
+        // タイマー進行
+        timer += Time.deltaTime;
+        if (timer >= splitAfterSec)
+        {
+            Explode();
+        }
+    }
+
+7) 爆発処理（破片を円形に射出）
+
+角度を等間隔に割って、cos/sin で単位ベクトル→速度に変換する。
+
+プールが渡されていれば Get()、無ければ Instantiate にフォールバックする。
+
+    private void Explode()
+    {
+        if (!space || !container || !shardPrefab)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        Vector2 pos = rect.anchoredPosition;
+        float step = 360f / shardCount;
+
+        for (int i = 0; i < shardCount; i++)
+        {
+            float deg = i * step;
+            float rad = deg * Mathf.Deg2Rad;
+
+            Vector2 dir = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad));
+            Vector2 v   = dir * shardSpeed;
+
+            // 生成 or プールから取得
+            GameObject go = shardPool ? shardPool.Get()
+                                      : Object.Instantiate(shardPrefab, space);
+            if (!shardPool && go.transform.parent != space)
+                go.transform.SetParent(space, false);
+
+            // 位置をセット
+            var rt = go.GetComponent<RectTransform>();
+            rt.anchoredPosition = pos;
+
+            // 破片の初期化（寿命・速度・当たり属性）
+            var baseLife = go.GetComponent<AllyBulletBaseUI>();
+            if (baseLife) baseLife.Init(container);
+
+            var mover = go.GetComponent<EnemyBulletMoverUI>();
+            if (mover) mover.SetVelocity(v);
+
+            var hb = go.GetComponent<UIHitbox2D>();
+            if (hb) { hb.role = UIRole.Bullet; hb.faction = UIFaction.Enemy; }
+        }
+
+        // 本体は役目を終えたので消す
+        Destroy(gameObject);
+    }
+
+8) 完成コード全体
+using UnityEngine;
+
+[RequireComponent(typeof(RectTransform))]
+public class EnemySplitBulletUI : MonoBehaviour
+{
+    private RectTransform space;
+    private RectTransform container;
+    private Vector2 velocity;
+
+    private float splitAfterSec;
+    private GameObject shardPrefab;
+    private int shardCount;
+    private float shardSpeed;
+    private GameObjectPool shardPool;
+
+    private RectTransform rect;
+    private float timer;
+
+    void Awake()
+    {
+        rect = GetComponent<RectTransform>();
+    }
+
+    public void Setup(
+        RectTransform spaceRT,
+        RectTransform containerRT,
+        Vector2 initialVelocity,
+        float splitAfterSeconds,
+        GameObject shardPrefab,
+        int shardCount,
+        float shardSpeed,
+        GameObjectPool shardPool = null
+    )
+    {
+        this.space       = spaceRT;
+        this.container   = containerRT;
+        this.velocity    = initialVelocity;
+        this.splitAfterSec = Mathf.Max(0.05f, splitAfterSeconds);
+        this.shardPrefab = shardPrefab;
+        this.shardCount  = Mathf.Max(1, shardCount);
+        this.shardSpeed  = shardSpeed;
+        this.shardPool   = shardPool;
+    }
+
+    void Update()
+    {
+        rect.anchoredPosition += velocity * Time.deltaTime;
+
+        timer += Time.deltaTime;
+        if (timer >= splitAfterSec)
+        {
+            Explode();
+        }
+    }
+
+    private void Explode()
+    {
+        if (!space || !container || !shardPrefab)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        Vector2 pos = rect.anchoredPosition;
+        float step = 360f / shardCount;
+
+        for (int i = 0; i < shardCount; i++)
+        {
+            float deg = i * step;
+            float rad = deg * Mathf.Deg2Rad;
+
+            Vector2 dir = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad));
+            Vector2 v   = dir * shardSpeed;
+
+            GameObject go = shardPool ? shardPool.Get()
+                                      : Object.Instantiate(shardPrefab, space);
+            if (!shardPool && go.transform.parent != space)
+                go.transform.SetParent(space, false);
+
+            var rt = go.GetComponent<RectTransform>();
+            rt.anchoredPosition = pos;
+
+            var baseLife = go.GetComponent<AllyBulletBaseUI>();
+            if (baseLife) baseLife.Init(container);
+
+            var mover = go.GetComponent<EnemyBulletMoverUI>();
+            if (mover) mover.SetVelocity(v);
+
+            var hb = go.GetComponent<UIHitbox2D>();
+            if (hb) { hb.role = UIRole.Bullet; hb.faction = UIFaction.Enemy; }
+        }
+
+        Destroy(gameObject);
+    }
+}
+
+9) 使い方
+
+分裂本体プレハブにこのスクリプトを付ける。見た目は丸などでよい。
+
+発射側（EnemyDanmakuController）で Instantiate 後に split.Setup(...) を必ず呼ぶ。
+
+shardPool を渡すと破片はプールから出る。未設定でも Instantiate で動く。
+
+破片プレハブには EnemyBulletMoverUI / AllyBulletBaseUI / UIHitbox2D(Bullet/Enemy) / UIBulletOnHitRecycle / Poolable を付ける。

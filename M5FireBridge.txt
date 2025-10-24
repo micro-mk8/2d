@@ -1,0 +1,138 @@
+1) using（定型文）
+using UnityEngine;
+using System;
+
+
+System を使うのはイベントを定義するためである。
+
+2) クラス宣言
+public class M5FireBridge : MonoBehaviour
+{
+
+
+ここではシングルトンにして、他のスクリプト（プレイヤーや弾幕制御）がどこからでも呼べるようにする。
+
+3) シングルトン実装
+    public static M5FireBridge Instance { get; private set; }
+
+    void Awake()
+    {
+        if (Instance != null && Instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+        Instance = this;
+    }
+
+
+これでシーンに複数あっても1つだけ生き残る。
+
+4) 発射イベント定義
+    public event Action OnFireReceived;
+
+
+他スクリプトがこのイベントを購読（+=）しておくことで、「M5 から FIRE 信号を受けたとき」に弾を出せる。
+
+5) UDP の監視処理
+
+ここでは UdpReceiver にすでに M5 からの文字列を受け取る仕組みがある前提で、それを監視する。
+
+    private string lastMsg = "";
+
+    void Update()
+    {
+        if (!UdpReceiver.Instance) return;
+
+        string msg = UdpReceiver.Instance.latestMessage;
+        if (msg == lastMsg || string.IsNullOrEmpty(msg)) return;
+
+        lastMsg = msg;
+
+        if (msg.Contains("FIRE"))
+        {
+            OnFireReceived?.Invoke();
+            Debug.Log("[M5FireBridge] FIRE signal received.");
+        }
+    }
+
+
+UdpReceiver.Instance.latestMessage には M5 が送信した文字列が入る。
+
+"FIRE" が含まれていたら OnFireReceived イベントを発火させる。
+
+?.Invoke() により、購読者がいれば全員呼ばれる。
+
+6) 完成コード全体
+using UnityEngine;
+using System;
+
+public class M5FireBridge : MonoBehaviour
+{
+    public static M5FireBridge Instance { get; private set; }
+
+    public event Action OnFireReceived;
+
+    private string lastMsg = "";
+
+    void Awake()
+    {
+        if (Instance != null && Instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+        Instance = this;
+    }
+
+    void Update()
+    {
+        if (!UdpReceiver.Instance) return;
+
+        string msg = UdpReceiver.Instance.latestMessage;
+        if (msg == lastMsg || string.IsNullOrEmpty(msg)) return;
+
+        lastMsg = msg;
+
+        if (msg.Contains("FIRE"))
+        {
+            OnFireReceived?.Invoke();
+            Debug.Log("[M5FireBridge] FIRE signal received.");
+        }
+    }
+}
+
+7) 使い方
+
+M5FireBridge を空の GameObject に付けておく（シーンに1つ）。
+
+UdpReceiver も同じシーン内にあることを確認する。
+
+弾を出す側（例えば PlayerShooter）で以下のように購読する。
+
+void OnEnable()
+{
+    if (M5FireBridge.Instance != null)
+        M5FireBridge.Instance.OnFireReceived += Fire;
+}
+
+void OnDisable()
+{
+    if (M5FireBridge.Instance != null)
+        M5FireBridge.Instance.OnFireReceived -= Fire;
+}
+
+void Fire()
+{
+    // 弾を出す処理
+}
+
+8) M5 側で送る信号の例
+
+M5StickC Plus 側の Arduino コードで、ボタンが押されたら "FIRE\n" を UDP で送信するようにしておく。
+
+if (M5.BtnA.wasPressed()) {
+  udp.beginPacket(dstIP, udpPort);
+  udp.printf("FIRE\n");
+  udp.endPacket();
+}
