@@ -1,0 +1,226 @@
+1) EnemyMotionSequenceUI.cs（敵の動きを“区間の並び”で作る）
+役割の全体像
+
+**Segment（区間）**の配列を順に消化して、直進・横/縦サイン波・8の字の各パターンを時間で切り替えて動かすコンポーネントです（MovePattern 列挙、Segment 構造体）。
+
+loopSequence が真なら最後まで行ったら先頭に戻ります（ループ）。
+
+画面端で外向きに進もうとしたとき、その成分だけ0 に抑える“壁停止”（ApplyWallStop）が入っています。
+
+主なフィールドと初期化
+
+segments…区間リスト。各区間は「パターン」「区間時間」「区間後ポーズ」「速度・方向」「振幅・周波数（サイン波）」「8の字の幅高さ/周波数/位相」を持つ（Segment）。
+
+wallStop ほか、端の内側余白や“端とみなす誤差”を指定（px）。
+
+Awake()：自分の RectTransform を確保。UIRectClamp が付いている前提なら container（外枠） をそこから取得（コメントに「private なら getter 用意を推奨」）。
+
+OnEnable()：最初の区間を開始（BeginSegment(0)）。
+
+Update：時間で分岐し、各パターンを動かす
+
+区間の休止中（pauseRemain > 0f）はカウントダウン、終わったら次へ（Advance()）。
+
+各パターンのコア（s = segments[idx] として参照）：
+
+Straight：dir を正規化（無指定なら左 Vector2.left）。delta = dir * speed * dt を壁停止に通してから anchoredPosition += delta（“.`”は rect の中の anchoredPosition）。
+
+HorizontalSine：
+
+Xは等速、Yは A·sin(ωt+位相) で前フレームとの差分だけ足す（newSine - sineOffset）。UI のサイン移動は“差分加算”にすると一貫性が保てる。最後に sineOffset = newSine を更新。外向き成分は ApplyWallStop で 0 に抑制。
+
+VerticalSine：X をサイン、Y は等速。考え方は横サインと対称的。
+
+FigureEight：
+
+8の字は Lissajous 的に x = W·sin(wt+φ), y = H·sin(2wt+φ) で中心 originPos からの相対位置として直接座標代入（“差分”ではなく“絶対位置”で上書き）。
+
+区間時間が終われば pauseAfterSec を仕込み（休止 0 なら即 Advance()）。
+
+区間制御の内部関数
+
+BeginSegment(i)：区間インデックス設定、segTime, t, sineOffset リセット、originPos 保存（8 の字の中心になる）。
+
+Advance()：最終区間の次は loopSequence によって先頭/終了へ。
+
+壁停止（深掘り）
+
+container.GetWorldCorners(C) と rect.GetWorldCorners(T) でワールド座標の四隅を得て AABB（外接矩形）を作る。UI はローカルとワールドを分けて考えるのがコツ。
+
+localDelta を親ローカル→ワールドに変換（TransformVector）し、端に接して外向きなら localDelta.x/y を 0 に潰す（“外へ押し出さない”）。
+
+2) EnemyMotionUI.cs（“パターン→初期位置に戻る”の状態機械）
+役割
+
+直線／8の字／三角ウェイポイントの 3 パターンを一定時間走らせ、初期位置に戻って休憩→次のパターン…という**状態機械（Sequencer）**で制御します（SeqState）。
+
+初期位置・速度スケール
+
+captureStartOnPlay：再生時に今の位置を初期値に記録（1 度だけ／上書き許可）。
+
+speedScale：全パターンに掛ける速度係数。S(v) => v * speedScale（インライン関数）。
+
+シーケンス設定
+
+useSequencer トグル、sequence（並び）、randomizeOrder、各パターンの実行秒数・休憩秒数・復帰速度/許容誤差などを Inspector で指定。
+
+直線・8の字・三角それぞれのパラメータ群（例：8の字は幅/高さ/周波数/位相、三角は半径/回転/移動速/到達判定）。
+
+ライフサイクルと状態遷移
+
+OnEnable()：初期位置キャプチャ→三角頂点計算→初期化。シーケンサーを有効にしていれば最初のパターンを選ぶ（sequence[0] など）。
+
+Update()：
+
+シーケンサ OFF なら現在パターンだけ動かす。
+
+ON のとき SeqState で分岐：
+
+PatternRunning：stateTimer を進め RunPattern。持ち時間を超えたら Returning に遷移。
+
+Returning：ReturnToStart で初期位置へ向けて等速移動。到着したら Resting に遷移。
+
+Resting：休憩秒数が過ぎたら SelectNextPattern() → ResetForNewPattern() → PatternRunning に戻る。
+
+パターンの実装（RunPattern）
+
+Straight：dir = straightDirection を正規化、anchoredPosition += dir * S(speed) * dt（“S”は速度スケール適用）。
+
+FigureEight：x=W·sin(wt+φ), y=H·sin(2wt+φ) を startPos 基準に座標代入。ここで w = 2π·(eightSpeedHz*speedScale)—**“周波数にも speedScale を反映”**している点がミソ。
+
+Triangle：初期位置を中心とする正三角の 3 頂点を回る。waypointArriveEps 以内で次の頂点へ、そうでなければ**“距離を越えないよう”**に step = to.normalized * S(speed) * dt をクランプして進める。
+
+初期位置へ戻る（ReturnToStart）
+
+toStart = startPos - pos、step を距離でクランプして進め、到着したら Resting へ遷移。
+
+ユーティリティ
+
+CaptureStartFromCurrent()（右クリックメニュー）／CaptureStartIfNeeded()（フラグに応じて自動記録）。
+
+PrepareTrianglePoints()：triangleRadius と回転 triangleRotateDeg から 3 点を startPos まわりに計算（極座標→直交）。
+
+ResetForNewPattern()：位置・位相・三角インデックスをリセット、SelectNextPattern()：ランダム/順送りで次の MovePattern を選択。
+
+ResetToStartForRetry()：ゲーム再開時などのため、初期位置や内部状態をまるごと再初期化。
+
+3) IUIBullet.cs（弾の“ヒット時”インターフェース）
+
+インターフェース＝「約束事（関数名・引数形）だけ定義した型」。弾が相手に当たったときの振る舞いを載せ替え可能にします。
+
+実装例：UIBulletOnHitRecycle : MonoBehaviour, IUIBullet として OnHit(UIHitbox2D target) を実装（“当たったらリサイクル/破棄”）。
+
+実際の衝突処理側は GetComponent<IUIBullet>() で取り出して bulletHandler?.OnHit(h) を呼び出す設計（＝弾ごとに当たり後の動作を差し替えられる）。
+
+つまり IUIBullet は “OnHit(UIHitbox2D target)” を約束する窓口。弾の種類に応じて「消える／貫通／分裂する／エフェクトを出す」などを差し替え可能、という思想です。
+
+4) UIBulletOnHitRecycle.cs（当たったらプール返却 or 破棄）
+
+RequireComponent(RectTransform) は UI コンポーネント前提の安全装置。
+
+IUIBullet 実装で OnHit を提供。中で Poolable があれば TryRelease()（プール返却）。なければ Destroy(gameObject)（通常破棄）。
+
+単語：Recycle=再利用（プーリング）、Destroy=破棄。
+
+5) UICollisionManager.cs（UI の当たり判定まとめ役）
+実行順と登録
+
+[DefaultExecutionOrder(1000)]：移動処理の後にこのスクリプトが走るよう実行順を遅らせる（フレーム内で「動いたあとの位置」で当たり判定）。
+
+4 種のリスト：bulletsPlayer / bulletsEnemy（弾）、hurtPlayer / hurtEnemy（被弾箱）に分けて保持。UIHitbox2D の role と faction からどのリストへ入れるか決定（Register/Unregister/GetList）。
+
+毎フレームのチェック
+
+味方弾 vs 敵被弾、敵弾 vs 味方被弾 のペアをそれぞれテスト（今は敵弾が未実装なら空）。
+
+TestPairs()：スナップショット（ToArray()）を取ってから二重ループ（途中で Destroy されても安全）。
+
+Rect br = b.GetWorldAABB() / Rect hr = h.GetWorldAABB() を取得し、br.Overlaps(hr)（矩形重なり）で衝突判定。
+
+当たったら 弾側 IUIBullet.OnHit(h)、被弾側 IUIHurtTarget.OnHitBy(b) を呼ぶ。弾は 1 ヒットで消費（break）という設計。
+
+矩形ベースの当たり判定なので UI の四隅から作る AABB を使うのがポイント。円形にしたいなら別の形状テストを自作できます。
+
+6) UIHitbox2D.cs（UI の当たり箱）
+
+陣営（UIFaction.Player/Enemy）と役割（UIRole.Bullet/Hurtbox）の列挙型を定義し、インスペクタで指定可能にする。
+
+padding（±で拡大/縮小）で当たり範囲を微調整できる。Awake/OnEnable/OnDisable で RectTransform キャッシュとコリジョン管理への登録解除を行う。
+
+AABB をワールド座標系で返す GetWorldAABB()：
+
+rect.GetWorldCorners(C) で四隅を取り、min/max を求めて Rect(minX,minY, 幅, 高さ) を返す（注：RectTransform.MinMaxRect ではなく Rect.MinMaxRect とコメント）。
+
+7) UdpReceiver.cs（UDP で M5 などのデータ受信）
+シングルトンと設定
+
+public static UdpReceiver Instance { get; private set; }：どこからでも参照できる唯一の受信機。DontDestroyOnLoad でシーン切り替えでも生存（親から外してルート化も）。
+
+listenPort / autoStart、latestRaw（生データ）/latestAccel（加速度ベクトル）を公開（デバッグしやすい）。
+
+受信開始・停止
+
+StartReceive()：new UdpClient(listenPort)、非同期受信ループ ReceiveLoop() を fire & forget（戻り値を待たずに開始）。
+
+StopReceive()：Close() して _running=false。
+
+非同期受信ループ（深掘り：パース）
+
+例外を細かく握りつぶしつつループ。Encoding.UTF8.GetString(res.Buffer) で文字列化→latestRaw = s.Trim() に保存。
+
+CSV "ax,ay,az" を推奨。InvariantCulture で float.Parse（小数点がピリオドでもローカルに依らず安定）→ latestAccel = (ax,ay,az) に保存。
+
+JSON 風のときは簡易パーサ（ParseAccelJson → Extract）で "ax": 0.12 の数値を抜き出す。負号や指数表記も許容（-+0123456789.eE）。
+
+破棄時は OnDestroy() で停止。
+
+8) PlayerMoverFromM5.cs（M5 の加速度で UI プレイヤーを動かす）
+入力調整パラメータ
+
+感度 pixelsPerG（1g あたり何 px/s 動かすか）、デッドゾーン deadZoneG（閾値以下は 0／超過分は 0～1 に再マップ）、入力スケール inputScale（「5 を 0.05g にしたい」など事前スケーリング）、軸の入替/反転 swapXY/invertX/invertY、ゼロ点補正 bias（机上のオフセット）などを Inspector から調整。
+
+autoCalibrateOnStart / calibrateKey（既定 C）でバイアス自動取得や手動キャプチャも可能。
+
+Update：座標更新の流れ
+
+UdpReceiver.Instance から latestAccel.x,y を読む（Z は使わない）→ Vector2 a。
+
+inputScale 適用 → swapXY / invertX/Y → bias を引く（ゼロ点補正）。
+
+ソフト・デッドゾーン：
+
+ApplySoftDeadzone(v, dz)：|v| ≤ dz なら 0、超過分は ( |v|-dz ) / (1-dz ) に滑らかに再マップ→操作の“遊び”を自然にする。
+
+rect.anchoredPosition += a * pixelsPerG * Time.deltaTime：加速度→速度（px/s）に換算して UI 座標を更新。
+
+キャリブレーション
+
+CaptureBias()：今の受信値をゼロ（bias）として記憶（XY 入替/反転/スケール後の値を用いるのがポイント）。
+
+ApplySoftDeadzone の実装詳細は末尾。Sign と Abs で符号保持の再マップをしているのがミソ（左右の感度が対称に）。
+
+9) PlayerMoverUI.cs（キーボードで UI プレイヤーを動かす）
+
+Input.GetAxisRaw("Horizontal") / ("Vertical") で ←→ / ↑↓（または WASD） を取得。斜め入力時の等速化のため dir.sqrMagnitude > 1 なら Normalize()（ベクトル長を 1 に）。
+
+anchoredPosition += dir * moveSpeed * dt：UI 2D の等速移動。SetMoveSpeed() で最小 0 にクランプして外部から速度調整も可。
+
+
+
+
+
+よく出る英単語・句の意味（再掲ショート版）
+
+RectTransform：UI の位置・サイズ情報を持つ特別な Transform。
+
+anchoredPosition：アンカー基準のローカル 2D 座標。
+
+GetWorldCorners：四隅をワールド座標で取得。AABB を組む際に使う。
+
+normalized：向きのみ（長さ 1）。向き × 速度 = 速度ベクトル。
+
+Time.deltaTime：前フレームからの“秒”。速度×秒＝移動量。
+
+**.（ドット）**：メンバーアクセス。“A の中の B”。例：rect.anchoredPosition`。
+
+[SerializeField] / [Header] / [RequireComponent] / [DefaultExecutionOrder]：エディタ表示・依存性・順序制御などの“属性”。

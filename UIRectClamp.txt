@@ -92,3 +92,105 @@ PlayerRoot / EnemyRoot の両方に付け、Container=PlayAreaFrame を指定し
 どんな移動（M5・蛇行・ウェイポイント）でも最後に枠内へ収める“ガードレール”として働きます。
 
 タグや Layer に依存しないため、当たり判定の設計と無関係に安全に使えます。
+
+
+1) using（定型文）
+using UnityEngine;
+
+2) クラス宣言
+[RequireComponent(typeof(RectTransform))]
+public class UIRectClamp : MonoBehaviour
+{
+
+
+UI要素を動かす前提なので、RectTransform が必須。
+
+3) インスペクター設定項目
+    [Header("制限設定")]
+    [Tooltip("この枠の中に対象を収める")]
+    [SerializeField] private RectTransform clampArea;
+
+
+clampArea は制限枠。
+プレイヤーや敵はこの中に閉じ込められる。
+例：PlayAreaFrame（左のゲームエリアのRectTransform）を指定する。
+
+4) 内部変数
+    private RectTransform self;
+
+
+自分自身の RectTransform を保持する。
+
+5) 初期化
+    void Awake()
+    {
+        self = GetComponent<RectTransform>();
+    }
+
+6) 毎フレーム、範囲内にClampする処理
+    void LateUpdate()
+    {
+        if (!clampArea || !self) return;
+
+        // 枠の座標系に変換
+        Vector2 pos = self.anchoredPosition;
+        Vector2 halfSize = self.rect.size * 0.5f;
+        Vector2 areaHalf = clampArea.rect.size * 0.5f;
+
+        // X座標をClamp
+        pos.x = Mathf.Clamp(pos.x,
+            -areaHalf.x + halfSize.x,
+            areaHalf.x - halfSize.x);
+
+        // Y座標をClamp
+        pos.y = Mathf.Clamp(pos.y,
+            -areaHalf.y + halfSize.y,
+            areaHalf.y - halfSize.y);
+
+        self.anchoredPosition = pos;
+    }
+
+7) 完成コード全体
+using UnityEngine;
+
+[RequireComponent(typeof(RectTransform))]
+public class UIRectClamp : MonoBehaviour
+{
+    [Header("制限設定")]
+    [Tooltip("この枠の中に対象を収める")]
+    [SerializeField] private RectTransform clampArea;
+
+    private RectTransform self;
+
+    void Awake()
+    {
+        self = GetComponent<RectTransform>();
+    }
+
+    void LateUpdate()
+    {
+        if (!clampArea || !self) return;
+
+        Vector2 pos = self.anchoredPosition;
+        Vector2 halfSize = self.rect.size * 0.5f;
+        Vector2 areaHalf = clampArea.rect.size * 0.5f;
+
+        pos.x = Mathf.Clamp(pos.x,
+            -areaHalf.x + halfSize.x,
+            areaHalf.x - halfSize.x);
+
+        pos.y = Mathf.Clamp(pos.y,
+            -areaHalf.y + halfSize.y,
+            areaHalf.y - halfSize.y);
+
+        self.anchoredPosition = pos;
+    }
+}
+
+8) 使い方
+
+プレイヤーまたは敵の GameObject にこのスクリプトをアタッチする。
+
+Clamp Area に PlayAreaFrame（ゲームエリアの枠）を指定する。
+
+再生すると、対象が範囲外に出ようとしても端で止まる。

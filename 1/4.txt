@@ -1,0 +1,176 @@
+1) GameFlowController.cs（タイトル→プレイ→ゲームオーバー／クリア、HUD・敵・弾のON/OFFを一括制御）
+何をする？
+
+ゲーム状態（Title/Playing/GameOver/GameClear）を持ち、開始・リトライ・ゲームオーバー表示・弾掃除・各システムの有効化をまとめてやる“現場監督”。
+
+参照（プレイヤー復活、弾の親、移動系、射撃系、敵システム、UIパネル、HUDスコア、GameClear UI など）を Inspector で受け取り、状態遷移時にON/OFF。
+
+主な流れ
+
+起動時 GoTitle() でタイトル状態に（タイトルパネルON、各システムOFF）。
+
+Update()：スペース/Enter で Title or GameOver から StartOrRetry()（= Start）。タイマーは unscaledDeltaTime（TimeScaleの影響なし）で積算。
+
+StartGame()：UIを切替→弾レイヤの子を全消去（プール返却 or Destroy）→プレイヤー残機/位置/HP初期化→スコア・HUD・敵HP・敵モーションをリセット→タイマー開始→移動/射撃/敵システムを有効化→onGameStart。
+
+プレイヤー側の onGameOver を購読して HandleGameOver() を呼ぶ（システム停止＋GameOver UI表示＋イベント発火）。
+
+行・文節のポイント
+
+public enum GameState { Title, Playing, GameOver, GameClear }：状態の列挙。状態機械の土台。
+
+SetActiveSafe(go, bool)：null かつ同じ状態なら触らない安全な ON/OFF。画面のチラつき/例外を抑える。
+
+ToggleArray(MonoBehaviour[] arr, bool enabled)：配列の enabled を一括切替。移動系/射撃系/敵システムを個別ON/OFFできる。
+
+ClearBullets()：弾親（bulletLayer）の子を末尾から走査し、Poolable が付いていれば TryRelease()（プール返却）、なければ Destroy。シーン開始時の弾残りを瞬間リセット。
+
+Reset()：ScoringManager.ResetScore() / HUDのスコア0化 / 敵ツリーの UIHealth.ResetHP() / EnemyMotionUI.ResetToStartForRetry() を一括実行。ステージ初期状態を揃える。
+
+FormatTime(float sec)：mm:ss.mmm 形式へ。小数3桁の演出。
+
+2) HurtboxToggleOnInvincible.cs（無敵の間だけ“被弾判定”をOFFにする橋渡し）
+何をする？
+
+InvincibilityController の 開始/終了イベントを購読し、プレイヤーの UIHitbox2D（Hurtbox）を enabled=false/true に切り替える。多重ヒット防止。
+
+行の意味
+
+onInvincibilityStart.AddListener(DisableHurtbox) / onInvincibilityEnd.AddListener(EnableHurtbox)：無敵区間の出入りで有効フラグを切替。登録解除も忘れずに（OnDisable）。
+
+originalEnabled を記録→無効化時に落ちたまま残らないよう フェイルセーフで戻す。
+
+3) InvincibilityController.cs（無敵時間の管理：開始・終了イベントで見た目／当たりを連動）
+何をする？
+
+Begin(seconds?) → その秒数だけ無敵にする。開始/終了で UnityEvent を発火（他の見た目・判定スクリプトが購読）。
+
+行の意味
+
+defaultDurationSeconds：省略時の無敵秒。Min(0f) で負値防止。
+
+IsInvincible プロパティで状態を外部から参照。
+
+Begin：duration = Max(0, seconds ?? default) → StopAllCoroutines() で再入を安全に → StartCoroutine(Run(duration))。非アクティブならフラグだけ立てる。
+
+Run：開始通知→時間待ち→終了通知。フレームごと Time.deltaTime 加算。
+
+EndNow()：強制終了（コルーチン停止→終了通知）。
+
+4) PlayerInvincibleVisual.cs（無敵中カンバスを点滅して見た目で伝える）
+何をする？
+
+CanvasGroup.alpha を低⇔高にスイッチして点滅。無敵開始/終了イベントに連動。
+
+行の意味・深掘り
+
+[RequireComponent(typeof(CanvasGroup))]：透明度演出に必要な部品を強制。
+
+blinkIntervalSeconds：点滅周期（0.125s ≒ 8Hz）。lowAlpha：薄くする透明度。
+
+OnEnable：invincibility にイベント購読、Reset() で CanvasGroup 自動補完。
+
+Update：blinking 中だけ timer を進め、>= interval で alpha をトグル。1行 if の（?:）で 低/高を切替。
+
+BeginBlink/EndBlink：開始時は lowAlpha に、終了時は 1f に戻す。フェイルセーフで OnDisable 時も 1f に復帰。
+
+5) PlayerRespawn.cs（残機・死亡時の処理・“復活しない”モードで無敵&射撃停止）
+何をする？
+
+残機を持ち、死亡時の挙動を制御。**今回は「復活しない（noRespawnMode）」**に切り替え可能で、その場全快→一定秒無敵→射撃だけ停止という“STGの標準リカバリ”を実装。
+
+主要フィールド
+
+playerHealth / playerRoot / hud：HP・位置・HUD。
+
+respawnAtLastPosition と lastAlivePosition：生存中の最後の座標を保持（後半の LateUpdate で更新）。
+
+initialLives / respawnDelay / spawnPosition：初期残機・リスポーン待ち・復活位置。
+
+invincibility / defaultInvincibleSeconds：無敵制御と秒数。
+
+moverComponents / fireComponents：復活や無敵中に移動・射撃の有効化を個別制御。
+
+HPイベント購読
+
+OnEnable() で playerHealth.onDead += OnPlayerDead、onDamaged += OnPlayerDamaged。解除も忘れずに。
+
+死亡時の分岐
+
+残機があれば lives-- → HUD反映 →
+
+noRespawnMode なら CoNoRespawn（その場回復→無敵→射撃停止→待つ→再開）へ
+
+そうでなければ“従来のリスポーンコルーチン”（コメント化）
+
+残機ゼロなら onGameOver?.Invoke()（GameFlowController へ伝播）。
+
+CoNoRespawn（深掘り）
+
+位置は動かさない（テレポ無し）
+
+restoreHPOnDeath なら playerHealth.ResetHP()（点滅中の再死亡を防ぐため）
+
+無敵秒：nextInvincibleSecondsOverride ?? defaultInvincibleSeconds（外部で可変秒指定があれば優先）
+
+無敵中だけ射撃系 enabled=false（移動は可）
+
+invincibility.Begin(sec) → WaitForSeconds(sec) → 終了後に射撃再開
+
+ステージ開始の初期化
+
+ResetLivesAndRespawnNow(lives, spawn)：コルーチン停止→フラグ初期化→残機セット→位置を spawnPosition に戻す→HP全快。GameFlowController.StartGame から呼ばれる想定。
+
+最後に：生存中の座標記録
+
+LateUpdate()：HP>0 かつ waitingRespawn==false のとき、毎フレームの最後に lastAlivePosition を更新。「動いたあと」の位置を正しく記録できる。
+
+6) StageClearOnAllEnemiesDead.cs（指定した敵が全員倒れたらクリア＋タイムボーナス加算）
+何をする？
+
+enemies 配列内の UIHealth が全員 onDead を発火したら、一度だけ ScoringManager.ComputeAndAddClearTimeBonus() を呼ぶ。コンソールにログも出す。
+
+行の意味
+
+OnEnable()：配列を走査して remaining を数え、各 onDead を購読。OnDisable() で解除。
+
+OnEnemyDead()：remaining-- し、0 になったら awarded=true で多重防止しつつ、ScoringManager.Instance?.ComputeAndAddClearTimeBonus()。null安全演算子 ?. がポイント。
+
+7) StageTimerStart.cs（ステージ開始時にスコアは維持したままタイマーだけ再スタート）
+何をする？
+
+Start() で ScoringManager.Instance?.StartNewLevel() を呼び、ステージ内の経過時間カウントをリセット（スコアは維持）。callOnStart で有効/無効を選べる。
+
+仕組みのつながり（今回の7本）
+[PlayerRespawn] --onGameOver--> [GameFlowController] (GameOver画面/停止)
+    |--無敵Begin--> [InvincibilityController] --UnityEvent--> 
+    |                 |--> [HurtboxToggleOnInvincible] (被弾判定OFF/ON)
+    |                 └--> [PlayerInvincibleVisual]     (点滅ON/OFF)
+
+[GameFlowController]
+    |--StartGame--> 弾掃除 / プレイヤー初期化 / 敵のHP&動きリセット
+    |--Toggle--> 移動・射撃・敵システムの enabled 一括切替
+
+[StageTimerStart] ---> ScoringManager.StartNewLevel() (タイマー開始)
+[StageClearOnAllEnemiesDead] ---> ScoringManager.ComputeAndAddClearTimeBonus()
+
+
+
+
+
+
+よく出る英単語・演算子（要点だけ）
+
+Begin/End：開始/終了。Begin(sec) で一定時間の状態を走らせる。
+
+Respawn：復活。noRespawn は“復活しない”モード。
+
+Hurtbox：被弾判定の箱。enabled=false で当たりを消す。
+
+CanvasGroup.alpha：UI全体の透明度（0=透明, 1=不透明）。
+
+UnityEvent.AddListener/RemoveListener：イベント購読/解除。
+
+?.（null 条件演算子）：左が null なら呼ばない安全な呼び出し。
+
+unscaledDeltaTime：TimeScaleを無視した実時間の増分（ポーズ中でも進めたいUIタイマー等に）。

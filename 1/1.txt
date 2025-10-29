@@ -1,0 +1,601 @@
+1) EnemyBulletMoverUI.cs（敵の小弾を等速直進）
+using UnityEngine;
+
+
+using：このファイルで使う“名前空間”を取り込む（インポート）。
+
+UnityEngine：MonoBehaviour, Vector2, Time, RectTransform など Unity の基本型が入っている箱。
+
+/// <summary>
+/// 敵の小弾：与えられた速度ベクトル( px/s )で直進するだけ。
+/// </summary>
+
+
+///：XML ドキュコメント。<summary> は概要。
+
+px/s：ピクセル毎秒（UI 空間での速度の単位）。
+
+[RequireComponent(typeof(RectTransform))]
+
+
+属性（アトリビュート）。このコンポーネントを付けるとき、必ず RectTransform も同居させる安全装置。UI 位置を扱うので必須。
+
+public class EnemyBulletMoverUI : MonoBehaviour
+
+
+class：クラス定義。
+
+: MonoBehaviour：Unity のコンポーネント基底クラスを継承＝GameObject にアタッチ可能。
+
+{
+    [SerializeField] private Vector2 velocityPxPerSec = Vector2.zero;
+
+
+[SerializeField]：private でもインスペクターに出して保存できる。
+
+Vector2：2D ベクトル型（x,y）。velocityPxPerSec＝「毎秒 px 単位の速度」。
+
+    private RectTransform rect;
+
+
+フィールドをキャッシュ（後で毎フレーム Get しない＝軽い）。
+
+    void Awake() => rect = GetComponent<RectTransform>();
+
+
+Awake()：コンポーネントが有効化された直後の初期化イベント。
+
+=>：式本体メソッド。rect = GetComponent<RectTransform>(); を 1 行で書いた。
+
+GetComponent<T>()：この GameObject の中から T 型のコンポーネントをとる。
+
+    public void SetVelocity(Vector2 v) => velocityPxPerSec = v;
+
+
+外部から速度を設定する“窓口”。
+
+    void Update()
+    {
+        rect.anchoredPosition += velocityPxPerSec * Time.deltaTime;
+    }
+}
+
+
+Update()：毎フレーム呼ばれる。
+
+rect.anchoredPosition：UI の「アンカー基準のローカル位置」。
+
++=：足して代入。
+
+Time.deltaTime：前フレームからの経過秒。位置 += 速度×経過秒で等速直進。
+
+このクラスは**「与えられた 2D 速度ベクトルで UI を等速直進」**するだけの役。
+
+2) BulletStraightUI.cs（Y 軸直進）
+using UnityEngine;
+
+
+（同上）
+
+/// <summary>
+/// Y軸のみ直進（UIローカル）。上(+Y)向きが既定。負にすれば下向き。
+/// </summary>
+
+
+「上向き（+Y）基準、directionSign を -1 にすると下向き」。
+
+[RequireComponent(typeof(RectTransform))]
+public class BulletStraightUI : MonoBehaviour
+{
+    [SerializeField] private float speedPxPerSec = 900f;
+    [SerializeField] private float directionSign = +1f; // +1:上, -1:下
+
+
+float：小数速度。
+
+directionSign：符号だけで上下を切り替える。
+
+    private RectTransform rect;
+
+    void Awake() => rect = GetComponent<RectTransform>();
+
+
+RectTransform をキャッシュ。
+
+    public void SetSpeed(float s) => speedPxPerSec = s;
+    public void SetUpwards(bool up) => directionSign = up ? +1f : -1f;
+
+
+プロパティ操作用メソッド。
+
+?: 条件演算子。「up が真なら +1、偽なら -1」。
+
+    void Update()
+    {
+        rect.anchoredPosition += new Vector2(0f, directionSign * speedPxPerSec * Time.deltaTime);
+    }
+}
+
+
+毎フレーム、Y のみ移動。「上か下か × 速度 × 経過秒」。
+
+3) BulletHomingUI.cs（簡易ホーミング）
+using UnityEngine;
+
+/// <summary>
+/// 簡易ホーミング弾。ターゲットをUI座標系で追尾。一定回頭速度で徐々に向きを合わせる。
+/// </summary>
+
+[RequireComponent(typeof(RectTransform))]
+public class BulletHomingUI : MonoBehaviour
+{
+    [SerializeField] private RectTransform target;         // 例：EnemyRoot
+    [SerializeField] private RectTransform space;          // BulletLayer（同じローカル空間で計算）
+    [SerializeField] private float speedPxPerSec = 700f;
+    [SerializeField] private float turnDegPerSec = 360f;   // 回頭速度（度/秒）
+
+
+target：追う相手（例：敵）。
+
+space：**“同じ計算座標系”**に変換するための基準（UI は階層で座標が違うため）。
+
+turnDegPerSec：1 秒あたり何度まで向きを変えられるか（急旋回の制限）。
+
+    private RectTransform rect;
+    private Vector2 dir = Vector2.up; // 初期向き 上
+
+
+dir：向きの単位ベクトル（長さ 1）。初期は上向き。
+
+（中略：Awake() で rect を GetComponent。Setup(target, space) があるならここで代入する流れ）
+
+Update の要点（概念）
+
+ターゲットの「中心」を space ローカル に落として targetPosLocal を得る
+
+自分の位置 rect.anchoredPosition と targetPosLocal の差から「目標方向ベクトル」を作る
+
+Vector2RotateTowards(dir, targetDir, 最大回頭ラジアン) で“いまの向きから、目標へ少しだけ回す”
+
+dir *= speedPxPerSec * Time.deltaTime を足して移動
+
+補助関数：座標変換
+
+private static Vector2 GetCenterLocal(RectTransform rt, RectTransform space)
+{
+    Vector3 worldPos = rt.TransformPoint(rt.rect.center);
+    Vector3 local3  = space.InverseTransformPoint(worldPos);
+    return new Vector2(local3.x, local3.y);
+}
+
+
+rt.TransformPoint(…)：ローカル→ワールド。
+
+space.InverseTransformPoint(…)：ワールド→space のローカル。
+
+センター点（rt.rect.center）を通して同一空間の座標にそろえる。
+
+補助関数：回頭
+
+private static Vector2 Vector2RotateTowards(Vector2 current, Vector2 target, float maxRadiansDelta)
+{
+    float cur = Mathf.Atan2(current.y, current.x);
+    float tar = Mathf.Atan2(target.y, target.x);
+    float delta = Mathf.DeltaAngle(cur * Mathf.Rad2Deg, tar * Mathf.Rad2Deg) * Mathf.Deg2Rad;
+    float step = Mathf.Clamp(delta, -maxRadiansDelta, +maxRadiansDelta);
+    float ang = cur + step;
+    return new Vector2(Mathf.Cos(ang), Mathf.Sin(ang));
+}
+
+
+Atan2(y,x)：ベクトルの向き（角度）をラジアンで取得。
+
+DeltaAngle(a,b)：2 つの角度の最小差（度単位）を返す。
+
+Rad2Deg / Deg2Rad：度↔ラジアンの変換定数。
+
+Clamp(v,min,max)：v を範囲内に“はさむ”。
+→ いきなり目標向きにせず、1 フレームあたり maxRadiansDelta だけ回す＝滑らかに首振り。
+
+4) AllyBulletBaseUI.cs（UI 弾の共通：寿命・画面外で消える）
+using UnityEngine;
+
+/// <summary>
+/// UI(RectTransform)弾の共通ベース：寿命と境界外で自動消滅。見た目はImageでOK。
+/// </summary>
+[RequireComponent(typeof(RectTransform))]
+public class AllyBulletBaseUI : MonoBehaviour
+{
+    [Header("寿命(秒)")]
+    [SerializeField] private float lifeTime = 4f;
+
+    [Header("境界(任意) - PlayAreaFrame を割当てる")]
+    [SerializeField] private RectTransform container;
+
+    private RectTransform rect;
+    private float timer;
+
+
+Header はインスペクタ表示の見出し（説明しやすくなる）。
+
+lifeTime 秒で自動消滅。
+
+container（例：PlayAreaFrame）を割り当てると“枠外消滅”も行う。
+
+（中略：Awake() で rect を取得）
+
+Update の要点
+
+timer += Time.deltaTime; if (timer >= lifeTime) RecycleOrDestroy();
+→ 寿命で消す
+
+if (container) があるとき：
+container.GetWorldCorners(C[]) & rect.GetWorldCorners(R[]) で四隅を取り、
+完全に外なら RecycleOrDestroy()。
+
+private void RecycleOrDestroy()
+{
+    var pb = GetComponent<Poolable>();
+
+    if (pb && pb.TryRelease()) return;
+    Destroy(gameObject);
+}
+
+
+オブジェクトプール（Poolable）があればプールへ返却、なければ Destroy。
+
+これを弾プレハブに付けておくと、勝手に寿命・枠外消滅が効く“便利ベース”。
+
+5) UIBulletDamage.cs（ダメージ持ち）
+using UnityEngine;
+
+public class UIBulletDamage : MonoBehaviour
+{
+    [Min(1)] public int damage = 1;  // 既定は 1 ダメージ
+}
+
+
+[Min(1)]：インスペクタで最小値を 1 に制限。
+
+public int damage：他の当たり判定や HP 管理と連携するときの“攻撃力”。
+
+6) AllyBulletController.cs（味方弾の発射制御）
+using UnityEngine;
+using UnityEngine.UI;
+
+/// <summary>
+/// 味方弾の発射制御。再生前にInspectorのチェックで有効/無効を切替可能。
+/// </summary>
+public class AllyBulletController : MonoBehaviour
+{
+    [Header("参照")]
+    [SerializeField] private RectTransform bulletLayer;     // PlayAreaFrame の子にある BulletLayer
+    [SerializeField] private RectTransform playAreaFrame;   // 境界
+    [SerializeField] private RectTransform enemyRoot;       // ホーミング用ターゲット
+
+    [Header("プレハブ")]
+    [SerializeField] private GameObject straightBulletPrefab;
+    [SerializeField] private GameObject homingBulletPrefab;
+
+
+弾の“親（bulletLayer）”“境界（playAreaFrame）”“ホーミング対象（enemyRoot）”を受け取る。
+
+使う弾プレハブ 2 種（直進／ホーミング）。
+
+（中略：各種トグルとパラメータ：
+enableStraight / enableHoming / enableM5Fire、straightFireRate straightSpeedPxPerSec、homingFireRate homingSpeed homingTurnDegPerSec など）
+
+Awake()
+
+自分自身の RectTransform rect = GetComponent<RectTransform>() をキャッシュ（以降、発射位置に使う）。
+
+Update() の発射レート制御（パターン同じなので直進だけ詳しく）
+
+float dt = Time.deltaTime;（経過秒）
+
+straightTimer += dt;（タイマー進行）
+
+float interval = Mathf.Max(0.01f, 1f / straightFireRate);
+
+rate（1秒あたりの弾数）から 間隔（秒） を逆算し、0.01 秒未満にならないように下限。
+
+if (straightTimer >= interval) { straightTimer -= interval; SpawnStraight(); }
+
+一定間隔を超えたら撃つ（余り時間は次へ持ち越し）。
+
+SpawnStraight()（直進弾の生成フロー）
+
+var go = Instantiate(straightBulletPrefab, bulletLayer);
+
+Instantiate(プレハブ, 親)：UI は親を正しく設定が重要（bulletLayer）。
+
+var rt = go.GetComponent<RectTransform>(); rt.anchoredPosition = rect.anchoredPosition;
+
+自機の現在位置から発射。
+
+var b = go.GetComponent<AllyBulletBaseUI>(); if (b) b.Init(playAreaFrame);
+
+寿命/枠外消滅を有効化。
+
+var s = go.GetComponent<BulletStraightUI>(); if (s) { s.SetSpeed(straightSpeedPxPerSec); s.SetUpwards(true); }
+
+速度と上向きをセット。
+
+SpawnHoming()（ホーミング弾）
+
+直進と同様に生成／位置セット／寿命セット。
+
+m.Setup(enemyRoot, bulletLayer);（ターゲット＆空間を渡す）
+
+速度と回頭速度はリフレクションで上書きしている部分がある（GetType().GetField(...).SetValue(...)）。
+→ “本来 private などで外から触れないメンバーに、実行時アクセスする仕組み”。
+可能なら public の Setter を用意する設計のほうが安全ですが、「あとから外部で差し替えたい」という意図がある場合にこう書くことがある。
+
+M5 フック：単発射
+
+public void FireStraightOnce_FromM5()
+{
+    if (!enableM5Fire || straightBulletPrefab == null) return;
+    SpawnStraight();
+}
+
+
+M5 側から“今だけ 1 発！”を受けたときに呼ぶ用。enableM5Fire が ON であることを確認して実行。
+
+7) M5FireBridge.cs（M5/UDP → 発射イベント）
+using UnityEngine;
+
+public class M5FireBridge : MonoBehaviour
+{
+    [SerializeField] private AllyBulletController controller;
+    private string lastRaw;
+
+    [SerializeField] private GameFlowController gameFlowController; // ← 追加：インスペクタで割り当て
+    [SerializeField] private bool triggerStartRetryOnFire = true;   // ← 追加：FIREでStart/Retryを呼ぶか
+
+    void Reset() { controller = GetComponent<AllyBulletController>(); }
+
+
+Reset()：インスペクタの「Reset」実行時に自動で味方弾コントローラを拾う補助。
+
+（中略：Update() 相当のループで UDP 受信を監視している前提）
+
+FIRE 受信処理の肝
+
+// … 受信テキスト raw を取得したと仮定 …
+if (raw == lastRaw) return;  // 同じ文字列連打の多重発火防止
+lastRaw = raw;
+
+if (raw.StartsWith("FIRE"))
+{
+    controller.enableM5Fire = true;       // 事前トグル ON
+    controller.FireStraightOnce_FromM5(); // 単発射
+}
+
+// ゲームの開始/リトライもここでトリガ可能
+if (triggerStartRetryOnFire && gameFlowController != null)
+    gameFlowController.StartOrRetry();
+
+
+StartsWith("FIRE")：文字列の先頭一致で“射撃ボタン”扱い。
+
+State 管理：lastRaw で同一文字列の連打による多重発火を抑制。
+
+8) EnemySplitBulletUI.cs（“分裂弾”の本体）
+using UnityEngine;
+
+[RequireComponent(typeof(RectTransform))]
+public class EnemySplitBulletUI : MonoBehaviour
+{
+    private RectTransform rect;
+    private RectTransform space;
+    private RectTransform container;
+
+    private Vector2 velocity;
+    private float splitAfterSec;
+    private float timer;
+
+    private GameObject shardPrefab;
+    private int shardCount;
+    private float shardSpeed;
+
+    // （略：初期化メソッド Setup で ↑ を受け取る設計）
+
+
+動きの流れ（概念）
+
+本体は velocity で直進しながら timer を進める
+
+timer >= splitAfterSec になったら 破片に分裂して、本体は Destroy(gameObject)
+
+分裂するときの生成ループ（抜粋・概念）
+
+for (int i = 0; i < shardCount; i++)
+{
+    float t = (float)i / shardCount;         // 0 ～ 1
+    float ang = start + (end - start) * t;   // 角度のばら撒き（例）
+    Vector2 dir = new Vector2(Mathf.Cos(a), Mathf.Sin(a));
+    Vector2 v = dir * shardSpeed;
+
+    var go = Instantiate(shardPrefab, space);
+    var rt = go.GetComponent<RectTransform>();
+    rt.anchoredPosition = rect.anchoredPosition;         // 本体位置から生成
+
+    var baseLife = go.GetComponent<AllyBulletBaseUI>();
+    if (baseLife) baseLife.Init(container);              // 寿命/枠外
+
+    var mover = go.GetComponent<EnemyBulletMoverUI>();
+    if (mover) mover.SetVelocity(v);                     // 直進速度セット
+
+    var hb = go.GetComponent<UIHitbox2D>();
+    if (hb) { hb.role = UIRole.Bullet; hb.faction = UIFaction.Enemy; }
+}
+Destroy(gameObject); // 本体は消える
+
+
+“分裂パラメータ”（何個・どの速度・どの角度範囲で）を Setup(...) で受け取り、それに従って破片（shardPrefab）を生成する。
+
+ここでも UI 空間の親（space） と 境界（container） の扱いを厳密にしているのがミソ。
+
+9) EnemyDanmakuController.cs（敵弾幕 3 パターン）
+using System.Collections.Generic;
+using UnityEngine;
+
+/// <summary>
+/// 敵の弾幕コントローラ。原案の3パターンを再現：
+/// 0: プレイヤー狙いツイン / 1: 半円ばら撒き / 2: 進行→分裂
+/// ・BulletLayer/PlayAreaFrame/EnemyRoot/PlayerRoot を同一UI空間に置くこと
+/// ・弾Prefabには UIHitbox2D(Role=Bullet,Faction=Enemy) と UIBulletOnHitDestroy を付ける
+/// ・寿命/画面外消滅は AllyBulletBaseUI をそのまま流用OK
+/// </summary>
+[RequireComponent(typeof(RectTransform))]
+public class EnemyDanmakuController : MonoBehaviour
+{
+    [Header("参照")]
+    [SerializeField] private RectTransform bulletLayer;    // 弾の親（PlayAreaFrameの子）
+    [SerializeField] private RectTransform playAreaFrame;  // 画面境界
+    [SerializeField] private RectTransform enemyRoot;      // 自分
+    [SerializeField] private RectTransform playerRoot;     // プレイヤー
+
+
+必要な UI 空間（同一 Canvas 階層）と参照を受け取る。
+
+    [Header("プレハブ")]
+    [SerializeField] private GameObject enemyBulletPrefab;      // 小弾
+    [SerializeField] private GameObject enemySplitBulletPrefab; // 分裂本体
+
+    [Header("有効パターン")]
+    [SerializeField] private bool enablePattern0 = true; // 狙いツイン
+    [SerializeField] private bool enablePattern1 = true; // 半円ばら撒き
+    [SerializeField] private bool enablePattern2 = true; // 分裂
+
+    [Header("共通")]
+    [SerializeField] private float intervalSec = 1.0f;  // 何秒ごとに撃つか
+    [SerializeField] private int burstCount = 1;        // 1 トリガで何回撃つか
+
+
+発射タイミングの“間隔”と“連撃回数（バースト）”。
+
+パターンごとの設定（抜粋）
+
+Pattern 0（狙いツイン）：弾速 aimedSpeed、左右の発射オフセット twinOffsetX。
+
+Pattern 1（半円）：startDeg ～ endDeg を stepDeg 刻み、弾速 radialSpeed。
+
+Pattern 2（分裂）：本体の初速 splitMainSpeed、splitAfterSec、破片数 shardCount、破片弾速 shardSpeed。
+
+Update の核
+
+timer += Time.deltaTime;
+if (timer < intervalSec) return;
+timer -= intervalSec;
+
+for (int i = 0; i < Mathf.Max(1, burstCount); i++)
+    FireRandomEnabledPattern();
+
+
+一定間隔で burstCount 回、有効なパターンから 1 つ選んで実行。
+
+有効パターンから 1 つ選ぶ
+
+var enabled = new List<int>(); if (enablePattern0) enabled.Add(0); …
+
+int idx = enabled[Random.Range(0, enabled.Count)];
+
+switch(idx) { case 0: FirePattern0(); … }
+
+Pattern 0：狙いツイン
+Vector2 enemy = GetCenterLocal(enemyRoot, bulletLayer);
+Vector2 player = GetCenterLocal(playerRoot, bulletLayer);
+Vector2 dir = (player - enemy).normalized;
+Vector2 v   = dir * aimedSpeed;
+
+SpawnBullet(enemy + new Vector2(-twinOffsetX, 0f), v);
+SpawnBullet(enemy + new Vector2(+twinOffsetX, 0f), v);
+
+
+敵→プレイヤー方向ベクトルを正規化して向きを得て、弾速を掛ける。
+
+左右に少しずらした 2 点から同速で発射。
+
+Pattern 1：半円ばら撒き
+float a0 = startDeg, a1 = endDeg, step = stepDeg;
+if (a1 < a0) { var tmp=a0; a0=a1; a1=tmp; } // 順序正規化
+
+for (float a = a0; a <= a1 + 0.01f; a += step)
+{
+    float rad = a * Mathf.Deg2Rad;
+    Vector2 dir = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad));
+    Vector2 v = dir * radialSpeed;
+    SpawnBullet(enemyCenter, v);
+}
+
+
+度→ラジアン変換して cos/sin で方向を作る。角度範囲を step で走査。
+
+Pattern 2：分裂
+// 本体（分裂弾）を敵中央に生成し、ターゲット方向へ進める
+var go = Instantiate(enemySplitBulletPrefab, bulletLayer);
+var rect = go.GetComponent<RectTransform>();
+rect.anchoredPosition = GetCenterLocal(enemyRoot, bulletLayer);
+
+Vector2 dir = playerExists ? (player - enemy).normalized : Vector2.down;
+Vector2 v = dir * splitMainSpeed;
+
+// 本体寿命・境界
+var life = go.GetComponent<AllyBulletBaseUI>();
+if (life) life.Init(playAreaFrame);
+
+// セットアップ：何秒後に、いくつの破片を、何速で、どの親の下に、どの境界で
+var split = go.GetComponent<EnemySplitBulletUI>();
+if (split) split.Setup(space: bulletLayer, container: playAreaFrame,
+                       velocity: v, splitAfterSec, shardPrefab: enemyBulletPrefab,
+                       shardCount, shardSpeed, /*必要なら pool など*/);
+
+
+本体は直進→一定秒後に破片をばら撒き→本体は消滅。
+
+破片にも AllyBulletBaseUI と EnemyBulletMoverUI を付けるため、共通処理が活きる。
+
+SpawnBullet（共通生成）
+
+Instantiate(prefab, bulletLayer) → RectTransform.anchoredPosition = 位置 → AllyBulletBaseUI.Init(playAreaFrame) → EnemyBulletMoverUI.SetVelocity(v) → UIHitbox2D の役割と陣営を Enemy にセット。
+→ UI 空間での弾生成の型を 1 箇所に集約。
+
+GetCenterLocal（座標ユーティリティ）
+
+上の BulletHoming と同じ“ローカル空間合わせ”。
+
+
+
+
+
+
+文法・英単語の補足まとめ（よく使うもの）
+
+.（ドット）＝メンバーアクセス：「A の中の B」。
+例：rect.anchoredPosition（rect の anchoredPosition）/ Time.deltaTime（Time の deltaTime）
+
+;（セミコロン）＝文の終端。
+
+[]（角括弧）＝属性（アトリビュート）。[SerializeField], [Header], [RequireComponent] など、エディタやコンパイラへの付加情報。
+
+//（スラッシュ2本）＝行コメント。/* ... */ はブロックコメント。
+
+=>（式本体）＝「短い関数を 1 行で」。void Awake() => rect = ...;
+
+?:（条件演算子）＝条件 ? 値1 : 値2。
+
+Mathf：数学ユーティリティ（Sin, Cos, Atan2, Deg2Rad, DeltaAngle, Clamp 等）。
+
+Vector2：2D ベクトル（normalized＝長さ 1 にする、up＝(0,1)、zero＝(0,0)）。
+
+Instantiate(prefab, parent)：プレハブを生成して親を設定。UI は親が重要（レイヤやスケールが合う）。
+
+Destroy(gameObject)：GameObject を破棄。
+
+GetComponent<T>()：同一 GameObject から T を取得。
+
+SerializeField：private でも Inspector に表示・保存したいとき。
+
+Header：Inspector の見出し、UI 設定をわかりやすくする。

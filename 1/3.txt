@@ -1,0 +1,359 @@
+1) HUDPresenter.cs（右パネルの HP / LIVES / SCORE 表示係）
+何をする？
+
+プレイヤーの HP 表示、残機（LIVES）、スコア（SCORE） をテキストに反映する“仲介役”。
+
+HP は UIHealth のイベントを購読（AddListener）して自動更新、LIVES/SCORE は 外部からメソッドで更新できる。
+
+フィールド（Inspector で紐づけ）
+
+TMP_Text hpText, livesText, scoreText
+TextMeshPro のテキスト部品。.text プロパティへ文字列を代入して表示を更新する。
+
+UIHealth playerHealth
+HP の情報源。“プレイヤー側の HP コンポーネント”を参照。
+
+int lives = 3, score = 0
+初期表示用の残機・スコア。
+
+ライフサイクル
+
+OnEnable()
+
+playerHealth.onDamaged.AddListener(OnPlayerHPChanged);
+→ HP が変わるたびに OnPlayerHPChanged(cur, max) が呼ばれるよう登録。
+
+RefreshAll();
+→ 画面の 3 か所（HP/Lives/Score）を“いまの値”で描き直す。
+
+OnDisable()
+
+AddListener したイベントは 必ず RemoveListener してから無効化。メモリリーク/多重呼び出しを避けるための習慣。
+
+表示更新の窓口
+
+private void OnPlayerHPChanged(int cur, int max) → RefreshHP(cur, max)
+→ HP だけ差し替え。
+
+public void AddScore(int delta)
+
+score = Mathf.Max(0, score + delta); で負数を防止。
+
+scoreText.text = $"SCORE {score}";
+文字列補間（$"..."）で "SCORE 12345" の形に。
+
+public void SetLives(int value)
+→ 直接残機を上書きして表示。
+
+public void SetScore(int v)
+→ scoreText に そのまま数値を入れる関数（フォーマットを変えたいときに使い分け可）。
+
+RefreshAll()
+
+playerHealth != null なら 現在の HP/最大 HP を UI に反映。
+
+null の場合は "HP --/--" のダミー表記。
+
+ドット（.）の読み方例
+
+playerHealth.onDamaged.AddListener(...)
+“playerHealth の中の onDamaged の中の AddListener（を呼ぶ）”。
+**. は「～の中の～」**という“階層アクセス”を表す演算子です。
+
+2) Poolable.cs（「このオブジェクトはプール管理できます」印）
+何をする？
+
+自分がどの GameObjectPool に属しているかを保持（BindPool）。
+
+TryRelease() が呼ばれたら、プールへ返却（＝Release(gameObject)）して再利用可能にする。
+→ プール未バインドなら false を返して「返却できない」。
+
+使い方の流れ
+
+生成時に Poolable をコンポーネントとして付け、BindPool(thisPool) を呼んで 所属プールを記録。
+
+弾やエフェクトが寿命/ヒットで消えるとき、
+
+TryRelease() が true→プール返却（SetActive(false) など）
+
+false→プール管理外なので普通に Destroy(gameObject)。
+
+設計のポイント
+
+使用側（弾・エフェクト）の「消す処理」は “プール返却 or 破棄” を自動振り分けできるように書くのがコツ。
+例：if (!poolable || !poolable.TryRelease()) Destroy(gameObject);
+
+3) GameObjectPool.cs（ObjectPool を使った汎用プール）
+何をする？
+
+Unity 標準の UnityEngine.Pool.ObjectPool<T> を使って、GameObject の再利用を管理。
+
+代表的なユースケース：弾・ヒットエフェクト・敵の小物など頻繁に出て消えるもの。
+
+重要フィールド
+
+GameObject prefab
+プールするプレハブ。
+
+Transform defaultParent
+取得時にぶら下げる親（例：BulletLayer）。UI では親が重要（座標系とスケールが合う）。
+
+prewarmCount / maxSize / collectionChecks
+
+Prewarm で事前生成→すぐ Release してプール内に温めておく。
+
+maxSize は最大収容数。collectionChecks は誤返却などのチェック（デバッグ向け）。
+
+Awake での構築
+
+createFunc
+
+Instantiate(prefab, defaultParent)
+
+go.SetActive(false)（生成直後は非表示）
+
+Poolable を確保して BindPool(this)（自分のプールを覚えさせる）
+
+actionOnGet
+
+取得時：SetParent(defaultParent) を再確認して 親を正す、SetActive(true) で見える化
+
+actionOnRelease
+
+返却時：SetActive(false) にする（位置や速度の初期化は利用側で）
+
+actionOnDestroy
+
+プール自体が壊れるときに中身も破棄
+
+公開 API
+
+Get()：1 個取り出し
+
+Release(GameObject go)：返却
+
+SetDefaultParent(Transform t)：実行中に親を切り替えたいとき用
+
+深掘り：UI とプール
+
+UI は Canvas 配下の座標系が大事なので、defaultParent を **正しい階層（BulletLayer 等）**にしておく。
+
+親が違うと「見えない/サイズがおかしい」などのトラブルに。actionOnGet で再設定しているのは 安全策。
+
+4) UIHealth.cs（HP・死亡・イベント通知・スコア連携）
+何をする？
+
+HP（最大値/現在値）を管理し、被弾時の処理を受け持つ“体力コンポーネント”。
+
+イベントで UI（HUD）や演出へ通知、死亡時の挙動（破棄・当たり無効化）を制御。
+
+スコア連携：与ダメージ/撃破の報告を ScoringManager へ行う。
+
+主なフィールド
+
+maxHP（最小 1）・currentHP（-1 は“未初期化フラグ”）
+
+destroyOnDeath（死んだ瞬間 Destroy するか）
+
+disableHitboxOnDeath（多重ヒットを防ぐため、死亡時に当たり判定を切るか）
+
+onDamaged (cur,max) / onDead（UnityEvent）
+→ HUDPresenter などに繋ぐ
+
+ライフサイクル
+
+Awake()：自分の UIHitbox2D をキャッシュ（陣営や AABB を持つ）
+
+OnEnable()：
+
+isDead = false
+
+currentHP = (currentHP < 0 ? maxHP : currentHP) を Clamp で 0～max に収める
+
+ヒットボックスを有効化
+
+onDamaged?.Invoke(currentHP, maxHP); ← ここが肝。
+→ 再開時に HUD を正しい値へリセット通知
+
+被弾の流れ（IUIHurtTarget.OnHitBy 実装）
+
+isDead や null をチェックして安全化
+
+味方撃ちを除外：if (bullet.faction == myHitbox.faction) return;
+
+ダメージ量の決定
+
+既定は 1
+
+弾に UIBulletDamage が付いていればその damage を使用（Mathf.Max(1, damage) で 1 未満を防ぐ）
+
+currentHP = Max(0, currentHP - dmg);
+
+HP 減少後、onDamaged?.Invoke(cur,max) を通知
+
+スコア報告
+
+ScoringManager.Instance?.ReportDamage(bulletHitbox, this, dmg, currentHP <= 0);
+→ 与ダメージ加点と、今の一撃で死んだか（killedNow） を渡す
+
+死亡処理
+
+currentHP <= 0 → isDead = true
+
+disableHitboxOnDeath なら myHitbox.enabled = false（多重ヒット回避）
+
+onDead?.Invoke() で演出側へ通知
+
+destroyOnDeath なら Destroy(gameObject)
+
+補助
+
+ResetHP()：外部から全快・復活させる窓口。onDamaged を発火して HUD を同期。
+
+5) ScoringManager.cs（スコアの集計・右パネルへの反映・クリアボーナス）
+何をする？
+
+シングルトン（Instance）でどこからでもアクセス。
+
+加点ルールを Inspector から調整可能（与ダメージ×倍率、撃破ボーナス、クリアタイム換算…）。
+
+右パネル（HUDPresenter）へ増分反映。
+
+クリア時の タイムボーナス を計算・加点。
+
+初期化
+
+Awake()
+
+Instance 多重を排除（既に他にいれば自分を Destroy）
+
+levelStartTime = Time.time で経過時間計測の基準を取る
+
+ダメージ/撃破の報告口
+public void ReportDamage(UIHitbox2D bullet, UIHealth target, int damage, bool killedNow)
+
+
+味方弾 → 敵のときだけ加点（陣営で判定）
+
+与ダメージ分：DamageDealt += damage; delta += damage * pointsPerDamage;
+
+撃破：TotalKills++ と pointsPerKill を加点
+
+TotalScore += delta; if (hud) hud.AddScore(delta);
+→ HUD のスコアへ“増分”を足す（リアルタイムに伸びる）
+
+クリア時の加点
+
+ComputeAndAddClearTimeBonus()
+
+経過秒 elapsed = Time.time - levelStartTime
+
+under = max(0, timeParSeconds - elapsed)（速いほど大きい）
+
+timeBonus = round(under * timeBonusPerSecondUnderPar) を timeBonusMax で抑制
+
+totalBonus = clearFlatBonus + max(0, timeBonus) をスコアへ反映
+
+そのほか
+
+StartNewLevel()：カウンタをリセットして再計測を開始
+
+ResetScore() / AddScore(int)：イベント onScoreChanged を発火（HUD をイベント駆動で更新したい場合に使える）
+
+深掘り：設計メモ
+
+与ダメージと撃破を別々に数えることで、
+
+“削り”の価値（与ダメージ）
+
+“トドメ”の価値（撃破）
+を両立。メリハリの効くスコアリングになる。
+
+6) UIRectClamp.cs（UI RectTransform を“枠内に収める”補正機）
+何をする？
+
+毎フレーム、**対象の四隅（ワールド座標）**を計算し、container（例：PlayAreaFrame）内に収まるよう位置を補正。アンカー/ピボットに依存しない。
+
+仕組み（LateUpdate）
+
+container.GetWorldCorners(C) と rect.GetWorldCorners(T) で四隅（4 点）のワールド座標を取得
+
+container の 内側境界（min/max）を出し、padding を引き算/足し算して 余白を確保
+
+対象 Rect の min/max と幅/高さを求める
+
+必要な補正量（dx, dy） を計算
+
+対象が container より小さい：
+
+右/上にはみ出したぶんを 押し戻す
+
+左/下にはみ出したぶんを 押し上げる
+
+対象が container より大きい：
+
+中心を一致させる（全部は収まらない前提なので“見切れ方”を中央に）
+
+rect.position += new Vector3(dx, dy, 0f);
+
+ワールド空間で動かすため、アンカー/ピボットの影響を受けないのがポイント
+
+深掘り：なぜワールドで？
+
+anchoredPosition はアンカー設定に依存してしまい、Rect の見た目上の四隅と一致しないことがある。
+
+だから 四隅 → min/max → position をワールドで微調整が一番ズレにくい。
+
+7) UdpDebugView.cs（UDP 受信の可視化）
+何をする？
+
+画面に ポート番号、最新の生文字列、加速度ベクトル（x,y,z） を表示。
+
+Update() で毎フレーム、UdpReceiver.Instance から値を取って TMP_Text.text を更新。
+
+表示の書式
+
+文字列補間と \n（改行）でシンプルに 3 行を作る。
+
+{r.latestAccel.x:F2} は 小数 2 桁のフォーマット指定。
+
+8) 仕組みの“つながり図”（今回の 7 本）
+[UdpReceiver]  ──最新加速度/Raw──►  [UdpDebugView]（文字列で表示）
+      │
+      └──► [PlayerMoverFromM5]（プレイヤー UI を移動）
+      
+[UIRectClamp] ----(枠内補正)----► 任意の RectTransform（プレイヤー等）
+
+[UIHealth] ──OnHitBy（被弾）──► HP 減少 → onDamaged / onDead イベント発火
+      │                                │
+      │                                └──► [HUDPresenter]（HP/LIVES/SCORE 更新）
+      └──► [ScoringManager]（与ダメ/撃破を報告→加点→HUDPresenter.AddScore）
+
+[GameObjectPool] ⇄ [Poolable] ⇄（弾やエフェクト）
+
+
+
+
+
+
+
+
+9) よく出る構文・英単語の意味（要点だけ再掲）
+
+.（ドット）＝メンバーアクセス。「A の中の B」。例：text.text / hud.AddScore(...)
+
+=>（式本体）＝“この一行だけやる”。public GameObject Get() => pool.Get();
+
+?.（null 条件）＝左が null なら呼ばない安全呼び出し。onDamaged?.Invoke(...)
+
+AddListener/RemoveListener＝UnityEvent の購読/解除。
+
+SerializeField＝private でも Inspector に出して保存できる。
+
+RequireComponent＝「これが無いと危ないから付けてね」。
+
+LateUpdate＝他の Update が終わったあと。見た目の最終補正に向く。
+
+Clamp/Min/Max＝数値を範囲に押し込む/端を取る。
+
+ObjectPool<T>＝再利用の仕組み。Get() で借り、Release() で返す。
